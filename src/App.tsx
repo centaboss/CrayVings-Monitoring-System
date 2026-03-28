@@ -1,4 +1,4 @@
-import "./App.css";
+
 import { useEffect, useState } from "react";
 import axios from "axios";
 import {
@@ -13,14 +13,11 @@ import {
 import {
   Thermometer,
   Waves,
-  FlaskConical,
-  AlertTriangle,
   LayoutDashboard,
-  Cpu,
+  Activity,
   Bell,
   History,
   Settings,
-  Activity,
 } from "lucide-react";
 
 type SensorEntry = {
@@ -31,14 +28,13 @@ type SensorEntry = {
   timestamp?: string;
 };
 
-type StatCardProps = {
-  title: string;
-  value: string;
-  color: string;
-  icon: React.ReactNode;
+type ChartPoint = {
+  name: string;
+  temperature: number;
+  water_level: number;
 };
 
-function StatCard({ title, value, color, icon }: StatCardProps) {
+function StatCard({ title, value, color, icon }: any) {
   return (
     <div style={{
       background: "#fff",
@@ -118,57 +114,43 @@ function Sidebar() {
 }
 
 export default function App() {
-  const [data, setData] = useState<SensorEntry[]>([]);
-function App() {
   const [data, setData] = useState<SensorEntry | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string>("");
+  const [history, setHistory] = useState<ChartPoint[]>([]);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    const fetchLatestData = async () => {
+    const fetchLatest = async () => {
       try {
-        const res = await axios.get<SensorEntry | null>(
+        const res = await axios.get<SensorEntry>(
           "http://192.168.1.20:3000/sensor/latest"
         );
 
-        console.log("Fetched latest sensor data:", res.data);
-
-        setData(res.data);
+        const latest = res.data;
+        setData(latest);
         setError("");
+
+        // append to chart history (keep last 20 points)
+        setHistory(prev => {
+          const newPoint = {
+            name: new Date().toLocaleTimeString(),
+            temperature: latest.temperature,
+            water_level: latest.water_level,
+          };
+
+          const updated = [...prev, newPoint];
+          return updated.slice(-20);
+        });
+
       } catch (err) {
         console.error(err);
+        setError("Failed to fetch sensor data");
       }
     };
 
-    fetchData();
-    const interval = setInterval(fetchData, 5000);
-        console.error("Error fetching latest sensor data:", err);
-        setError("Failed to fetch sensor data.");
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchLatestData();
-
-    const interval = setInterval(() => {
-      fetchLatestData();
-    }, 3000);
-
+    fetchLatest();
+    const interval = setInterval(fetchLatest, 3000);
     return () => clearInterval(interval);
   }, []);
-
-  const latest = data[0];
-
-  const temperatureData = data.map((d, i) => ({
-    name: `#${i + 1}`,
-    value: d.temperature,
-  }));
-
-  const waterLevelData = data.map((d, i) => ({
-    name: `#${i + 1}`,
-    value: d.water_level,
-  }));
 
   return (
     <div style={{ display: "flex", minHeight: "100vh", background: "#f3f4f6" }}>
@@ -186,7 +168,11 @@ function App() {
         </div>
 
         <div style={{ padding: 24 }}>
-          {/* LIVE STAT CARDS */}
+
+          {/* ERROR */}
+          {error && <div style={{ color: "red" }}>{error}</div>}
+
+          {/* STAT CARDS */}
           <div style={{
             display: "grid",
             gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
@@ -195,107 +181,59 @@ function App() {
           }}>
             <StatCard
               title="Temperature"
-              value={`${latest?.temperature ?? 0} °C`}
+              value={`${data?.temperature ?? 0} °C`}
               color="#f97316"
               icon={<Thermometer size={24} />}
             />
             <StatCard
               title="Water Level"
-              value={`${latest?.water_level ?? 0} %`}
+              value={`${data?.water_level ?? 0} %`}
               color="#0ea5e9"
               icon={<Waves size={24} />}
             />
           </div>
 
-          {/* LIVE CHARTS */}
+          {/* CHARTS */}
           <div style={{
             display: "grid",
             gridTemplateColumns: "repeat(auto-fit, minmax(380px, 1fr))",
             gap: 20,
           }}>
-            <div style={{
-              background: "#fff",
-              borderRadius: 22,
-              padding: 20,
-            }}>
+            <div style={{ background: "#fff", borderRadius: 22, padding: 20 }}>
               <h3>Temperature Trend</h3>
               <ResponsiveContainer width="100%" height={250}>
-                <LineChart data={temperatureData}>
+                <LineChart data={history}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="name" />
                   <YAxis />
                   <Tooltip />
-                  <Line dataKey="value" stroke="#f97316" />
+                  <Line dataKey="temperature" stroke="#f97316" />
                 </LineChart>
               </ResponsiveContainer>
             </div>
 
-            <div style={{
-              background: "#fff",
-              borderRadius: 22,
-              padding: 20,
-            }}>
+            <div style={{ background: "#fff", borderRadius: 22, padding: 20 }}>
               <h3>Water Level Trend</h3>
               <ResponsiveContainer width="100%" height={250}>
-                <LineChart data={waterLevelData}>
+                <LineChart data={history}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="name" />
                   <YAxis />
                   <Tooltip />
-                  <Line dataKey="value" stroke="#0ea5e9" />
+                  <Line dataKey="water_level" stroke="#0ea5e9" />
                 </LineChart>
               </ResponsiveContainer>
             </div>
           </div>
 
-          {/* RAW DEVICE DATA */}
-          <div style={{ marginTop: 24 }}>
-            {data.map((d, i) => (
-              <div key={i} style={{
-                background: "#fff",
-                padding: 16,
-                marginBottom: 10,
-                borderRadius: 12,
-              }}>
-                Device: {d.device_id} | Temp: {d.temperature}°C | Level: {d.water_level}%
-              </div>
-            ))}
+          {/* DEVICE INFO */}
+          <div style={{ marginTop: 24, background: "#fff", padding: 16, borderRadius: 12 }}>
+            Device: {data?.device_id ?? "N/A"} <br />
+            Last Update: {data?.timestamp ? new Date(data.timestamp).toLocaleString() : "N/A"}
           </div>
+
         </div>
       </div>
-    <div className="p-10 min-h-screen bg-gray-100">
-      <h1 className="text-3xl font-bold mb-6 text-center">
-        Aquaculture Monitoring Dashboard
-      </h1>
-
-      {loading ? (
-        <p className="text-center text-lg">Loading latest sensor data...</p>
-      ) : error ? (
-        <p className="text-center text-red-500">{error}</p>
-      ) : data ? (
-        <div className="max-w-xl mx-auto bg-white p-8 rounded-xl shadow-md">
-          <h2 className="text-2xl font-semibold mb-4 text-center">
-            Device: {data.device_id}
-          </h2>
-
-          <p className="text-2xl mb-3">
-            Temperature: {data.temperature} °C
-          </p>
-
-          <p className="text-2xl mb-3">
-            Water Level: {data.water_level} %
-          </p>
-
-          <p className="text-sm text-gray-500 mt-6 text-center">
-            Last Updated:{" "}
-            {data.timestamp
-              ? new Date(data.timestamp).toLocaleString()
-              : "No timestamp"}
-          </p>
-        </div>
-      ) : (
-        <p className="text-center text-red-500">No sensor data found.</p>
-      )}
     </div>
   );
 }
