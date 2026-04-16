@@ -1,6 +1,6 @@
 const express = require("express");
-const mongoose = require("mongoose");
 const cors = require("cors");
+const { Pool } = require("pg");
 require("dotenv").config();
 
 const app = express();
@@ -16,45 +16,41 @@ app.use(
   })
 );
 
-const SensorSchema = new mongoose.Schema({
-  device_id: { type: String, required: true },
-  temperature: { type: Number, default: 0 },
-  water_level: { type: Number, default: 0 },
-  ph: { type: Number, default: 0 },
-  dissolved_oxygen: { type: Number, default: 0 },
-  ammonia: { type: Number, default: 0 },
-  timestamp: { type: Date, default: Date.now },
+const pool = new Pool({
+  host: process.env.PG_HOST || "localhost",
+  port: process.env.PG_PORT || 5432,
+  database: process.env.PG_DATABASE || "crayvings_monitoring_system_db",
+  user: process.env.PG_USER || "postgres",
+  password: process.env.PG_PASSWORD || "JAPAN1234",
 });
 
-const Sensor = mongoose.model("Sensor", SensorSchema);
-
-mongoose
-  .connect("mongodb://127.0.0.1:27017/aquaculture")
-  .then(() => console.log(`[${new Date().toISOString()}] DB connected`))
-  .catch((err) =>
-    console.error(`[${new Date().toISOString()}] DB connection error:`, err)
-  );
-
-mongoose.connection.on("disconnected", () =>
-  console.warn(`[${new Date().toISOString()}] DB disconnected`)
-);
-
-mongoose.connection.on("reconnected", () =>
-  console.log(`[${new Date().toISOString()}] DB reconnected`)
-);
-
-mongoose.connection.on("error", (err) =>
-  console.error(`[${new Date().toISOString()}] DB error:`, err)
-);
-
-mongoose.connection.once("open", async () => {
+async function initDatabase() {
+  const client = await pool.connect();
   try {
-    const count = await Sensor.countDocuments();
-    console.log(`[${new Date().toISOString()}] Sensor documents count:`, count);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS sensors (
+        id SERIAL PRIMARY KEY,
+        device_id VARCHAR(50) NOT NULL,
+        temperature DECIMAL(5,2) DEFAULT 0,
+        water_level DECIMAL(5,2) DEFAULT 0,
+        ph DECIMAL(5,2) DEFAULT 0,
+        dissolved_oxygen DECIMAL(5,2) DEFAULT 0,
+        ammonia DECIMAL(5,2) DEFAULT 0,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    
+    const result = await client.query("SELECT COUNT(*) FROM sensors");
+    console.log(`[${new Date().toISOString()}] Sensor records count: ${result.rows[0].count}`);
+    console.log(`[${new Date().toISOString()}] PostgreSQL connected and table ready`);
   } catch (err) {
-    console.error(`[${new Date().toISOString()}] Count error:`, err);
+    console.error(`[${new Date().toISOString()}] DB init error:`, err.message);
+  } finally {
+    client.release();
   }
-});
+}
+
+initDatabase();
 
 app.get("/", (req, res) => {
   res.send("Server running");
@@ -62,11 +58,11 @@ app.get("/", (req, res) => {
 
 app.get("/health", async (req, res) => {
   try {
-    const count = await Sensor.countDocuments();
+    const result = await pool.query("SELECT COUNT(*) FROM sensors");
     res.json({
       status: "ok",
-      database: mongoose.connection.readyState === 1 ? "connected" : "disconnected",
-      documents: count,
+      database: "connected",
+      documents: parseInt(result.rows[0].count),
       serverTime: new Date().toISOString(),
     });
   } catch (err) {
@@ -96,23 +92,26 @@ app.post("/sensor", async (req, res) => {
       });
     }
 
-    const data = new Sensor({
-      device_id,
-      temperature: Number(temperature ?? 0),
-      water_level: Number(water_level ?? 0),
-      ph: Number(ph ?? 0),
-      dissolved_oxygen: Number(dissolved_oxygen ?? 0),
-      ammonia: Number(ammonia ?? 0),
-      timestamp: timestamp ? new Date(timestamp) : new Date(),
-    });
+    const result = await pool.query(
+      `INSERT INTO sensors (device_id, temperature, water_level, ph, dissolved_oxygen, ammonia, timestamp)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING *`,
+      [
+        device_id,
+        Number(temperature ?? 0),
+        Number(water_level ?? 0),
+        Number(ph ?? 0),
+        Number(dissolved_oxygen ?? 0),
+        Number(ammonia ?? 0),
+        timestamp ? new Date(timestamp) : new Date(),
+      ]
+    );
 
-    await data.save();
-
-    console.log(`[${new Date().toISOString()}] Sensor data saved:`, data);
+    console.log(`[${new Date().toISOString()}] Sensor data saved:`, result.rows[0]);
 
     res.status(201).json({
       message: "Saved to database",
-      data,
+      data: result.rows[0],
     });
   } catch (err) {
     console.error(`[${new Date().toISOString()}] Error saving sensor:`, err);
@@ -125,9 +124,10 @@ app.post("/sensor", async (req, res) => {
 
 app.get("/sensor", async (req, res) => {
   try {
-    const data = await Sensor.find().sort({ timestamp: -1 }).limit(50);
-
-    res.json(data);
+    const result = await pool.query(
+      "SELECT * FROM sensors ORDER BY timestamp DESC LIMIT 50"
+    );
+    res.json(result.rows);
   } catch (err) {
     console.error(`[${new Date().toISOString()}] Error fetching sensors:`, err);
     res.status(500).json({
@@ -139,17 +139,18 @@ app.get("/sensor", async (req, res) => {
 
 app.get("/sensor/latest", async (req, res) => {
   try {
-    const latestData = await Sensor.findOne().sort({ timestamp: -1 });
+    const result = await pool.query(
+      "SELECT * FROM sensors ORDER BY timestamp DESC LIMIT 1"
+    );
 
-    if (!latestData) {
+    if (result.rows.length === 0) {
       return res.status(404).json({
         message: "No sensor data found",
       });
     }
 
-    console.log(`[${new Date().toISOString()}] Latest data sent:`, latestData);
-
-    res.json(latestData);
+    console.log(`[${new Date().toISOString()}] Latest data sent:`, result.rows[0]);
+    res.json(result.rows[0]);
   } catch (err) {
     console.error(`[${new Date().toISOString()}] Error fetching latest sensor data:`, err);
     res.status(500).json({
@@ -162,102 +163,3 @@ app.get("/sensor/latest", async (req, res) => {
 app.listen(PORT, "0.0.0.0", () =>
   console.log(`[${new Date().toISOString()}] Server started on port ${PORT}`)
 );
-
-// ============================================
-// Arduino Serial Communication (Auto-Save)
-// ============================================
-// Requires: npm install serialport
-// Configure in .env: ARDUINO_PORT=/dev/ttyUSB0 or COM3
-// Arduino format: temperature,water_level,ph,dissolved_oxygen,ammonia
-
-const ARDUINO_ENABLED = process.env.ARDUINO_ENABLED === "true";
-const ARDUINO_PORT = process.env.ARDUINO_PORT || "COM3";
-const ARDUINO_BAUD = parseInt(process.env.ARDUINO_BAUD || "9600");
-const DEVICE_ID = process.env.DEVICE_ID || "ARDUINO_001";
-const POLL_INTERVAL = parseInt(process.env.POLL_INTERVAL || "5000");
-
-let serialPort = null;
-
-async function saveSensorData(data) {
-  try {
-    const sensorData = new Sensor({
-      device_id: data.device_id || DEVICE_ID,
-      temperature: Number(data.temperature ?? 0),
-      water_level: Number(data.water_level ?? 0),
-      ph: Number(data.ph ?? 0),
-      dissolved_oxygen: Number(data.dissolved_oxygen ?? 0),
-      ammonia: Number(data.ammonia ?? 0),
-      timestamp: new Date(),
-    });
-
-    await sensorData.save();
-    console.log(`[${new Date().toISOString()}] Arduino data saved:`, sensorData);
-    return true;
-  } catch (err) {
-    console.error(`[${new Date().toISOString()}] Error saving Arduino data:`, err.message);
-    return false;
-  }
-}
-
-async function initArduino() {
-  if (!ARDUINO_ENABLED) {
-    console.log(`[${new Date().toISOString()}] Arduino auto-read disabled (set ARDUINO_ENABLED=true to enable)`);
-    return;
-  }
-
-  try {
-    const { SerialPort } = require("serialport");
-    const { ReadlineParser } = require("@serialport/parser-readline");
-
-    serialPort = new SerialPort({
-      path: ARDUINO_PORT,
-      baudRate: ARDUINO_BAUD,
-    });
-
-    const parser = serialPort.pipe(new ReadlineParser({ delimiter: "\n" }));
-
-    serialPort.on("open", () => {
-      console.log(`[${new Date().toISOString()}] Serial port ${ARDUINO_PORT} opened`);
-    });
-
-    serialPort.on("error", (err) => {
-      console.error(`[${new Date().toISOString()}] Serial port error:`, err.message);
-    });
-
-    parser.on("data", async (line) => {
-      const trimmed = line.trim();
-      if (!trimmed) return;
-
-      // Expected format: temperature,water_level,ph,dissolved_oxygen,ammonia
-      // Example: 25.5,10.2,7.0,8.5,0.1
-      const parts = trimmed.split(",").map((p) => parseFloat(p.trim()));
-
-      if (parts.length === 5 && parts.every((v) => !isNaN(v))) {
-        const [temperature, water_level, ph, dissolved_oxygen, ammonia] = parts;
-        await saveSensorData({ temperature, water_level, ph, dissolved_oxygen, ammonia });
-      } else {
-        console.warn(`[${new Date().toISOString()}] Invalid Arduino data format: "${trimmed}"`);
-      }
-    });
-
-    serialPort.on("close", () => {
-      console.log(`[${new Date().toISOString()}] Serial port closed`);
-      if (ARDUINO_ENABLED) {
-        console.log(`[${new Date().toISOString()}] Reconnecting in 5 seconds...`);
-        setTimeout(initArduino, 5000);
-      }
-    });
-
-  } catch (err) {
-    if (err.code === "MODULE_NOT_FOUND") {
-      console.error(`[${new Date().toISOString()}] serialport package not found. Run: npm install serialport @serialport/parser-readline`);
-    } else {
-      console.error(`[${new Date().toISOString()}] Failed to init Arduino:`, err.message);
-    }
-  }
-}
-
-// Start Arduino reader after DB is ready
-mongoose.connection.once("open", () => {
-  initArduino();
-});
