@@ -1,3 +1,4 @@
+import logo from "../assets/craybitch without background.png";
 import {
   LayoutDashboard,
   Activity,
@@ -26,7 +27,11 @@ export default function Sidebar({ activeMenu, setActiveMenu }: Props) {
   return (
     <div className="w-24 bg-[#f5efe9] border-r border-[#eadfd6] min-h-screen flex flex-col items-center pt-4">
       <div className="w-14 h-14 rounded-full bg-white flex items-center justify-center overflow-hidden border-2 border-[#e9d3c6] mb-4 text-[10px] font-bold text-[#c2410c]">
-        LOGO
+        <img
+      src={logo}
+      alt="Logo"
+      className="w-full h-full object-contain"
+    />
       </div>
 
       <div className="w-full flex flex-col gap-1 px-2">
