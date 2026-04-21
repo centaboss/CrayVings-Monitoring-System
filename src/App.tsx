@@ -79,7 +79,7 @@ export default function App() {
   const renderPage = () => {
     switch (activeMenu) {
       case "Home":
-        return <HomePage />;
+        return <HomePage data={data} />;
       case "Dashboard":
         return <DashboardPage data={data} history={history} />;
       case "Sensors":
