@@ -1,13 +1,7 @@
-import { Thermometer, Droplets, Waves, FlaskConical, AlertTriangle, AlertCircle, CheckCircle } from "lucide-react";
-import type { SensorEntry } from "../types";
-import { getAlerts } from "../utils/alerts";
-
-type Props = {
-  data: SensorEntry | null;
 import { useEffect, useState } from "react";
+import { Thermometer, Droplets, Waves, FlaskConical, AlertTriangle, AlertCircle, CheckCircle, RefreshCw, BellOff, Settings } from "lucide-react";
 import type { SensorEntry, MenuKey } from "../types";
 import { getAlerts } from "../utils/alerts";
-import { RefreshCw, BellOff, Settings } from "lucide-react";
 
 type Props = {
   data: SensorEntry | null;
@@ -20,91 +14,28 @@ type Stat = {
   value: string;
   description: string;
   gradient: string;
-  icon: React.ReactNode;
 };
 
-function StatCard({ title, value, description, gradient, icon }: Stat) {
+function StatCard({ title, value, description, gradient }: Stat) {
   return (
     <div className={`rounded-2xl bg-gradient-to-r ${gradient} p-5 text-white shadow-sm`}>
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-white/90">{title}</p>
-        <div className="text-white/80">{icon}</div>
-      </div>
+      <p className="text-sm text-white/90">{title}</p>
       <h3 className="mt-2 text-3xl font-bold">{value}</h3>
       <p className="mt-2 text-sm text-white/90">{description}</p>
     </div>
   );
 }
 
-export default function HomePage({ data }: Props) {
-  const hasData = !!data;
-  const alerts = getAlerts(data);
-  const safe = alerts.length === 1 && alerts[0] === "Tank is Safe";
-
-  const getStatusBadge = () => {
-    if (!hasData) {
-      return (
-        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-600">
-          <AlertCircle size={14} />
-          No Data
-        </span>
-      );
-    }
-    if (safe) {
-      return (
-        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">
-          <CheckCircle size={14} />
-          Tank Safe
-        </span>
-      );
-    }
-    return (
-      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-red-100 text-red-700">
-        <AlertTriangle size={14} />
-        Attention Needed
-      </span>
-    );
-  };
-
-  const stats: Stat[] = [
-    {
-      title: "Water Temperature",
-      value: data ? `${data.temperature}°C` : "--°C",
-      description: "Current tank temperature",
-      gradient: "from-blue-500 to-cyan-500",
-      icon: <Thermometer size={24} />,
-    },
-    {
-      title: "pH Level",
-      value: data ? `${data.ph}` : "--",
-      description: "Normal water acidity (6.5-8.5)",
-      gradient: "from-emerald-400 to-teal-400",
-      icon: <FlaskConical size={24} />,
-    },
-    {
-      title: "Dissolved Oxygen",
-      value: data ? `${data.dissolved_oxygen} mg/L` : "-- mg/L",
-      description: "Healthy oxygen range",
-      gradient: "from-sky-400 to-cyan-500",
-      icon: <Droplets size={24} />,
-    },
-    {
-      title: "Water Level",
-      value: data ? `${data.water_level} cm` : "-- cm",
-      description: "Tank water level",
-      gradient: "from-indigo-500 to-blue-500",
-      icon: <Waves size={24} />,
-    },
-  ];
 export default function HomePage({ data, onRefresh, onNavigate }: Props) {
   const [stats, setStats] = useState<Stat[]>([]);
   const [alertsDismissed, setAlertsDismissed] = useState(false);
+
+  const hasData = !!data;
   const alerts = getAlerts(data);
   const isSafe = alerts.length === 1 && alerts[0] === "Tank is Safe";
 
   useEffect(() => {
     if (data) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setStats([
         {
           title: "Water Temperature",
@@ -134,6 +65,31 @@ export default function HomePage({ data, onRefresh, onNavigate }: Props) {
     }
   }, [data]);
 
+  const getStatusBadge = () => {
+    if (!hasData) {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-600">
+          <AlertCircle size={14} />
+          No Data
+        </span>
+      );
+    }
+    if (isSafe) {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">
+          <CheckCircle size={14} />
+          Tank Safe
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-red-100 text-red-700">
+        <AlertTriangle size={14} />
+        Attention Needed
+      </span>
+    );
+  };
+
   const highlights = [
     { label: "Temperature", value: data ? `${data.temperature}°C` : "--", color: "bg-blue-50 border-blue-200 text-blue-700" },
     { label: "Water Quality", value: data ? `${data.ph} pH` : "--", color: "bg-emerald-50 border-emerald-200 text-emerald-700" },
@@ -159,7 +115,6 @@ export default function HomePage({ data, onRefresh, onNavigate }: Props) {
               </span>
               {getStatusBadge()}
             </div>
-           
 
             <h1 className="text-3xl font-bold text-gray-900 lg:text-4xl">
               Welcome to CRAYvings Water Monitoring Home
@@ -204,7 +159,7 @@ export default function HomePage({ data, onRefresh, onNavigate }: Props) {
         </div>
       </section>
 
-      {!safe && hasData && (
+      {!isSafe && hasData && (
         <section className="rounded-xl border border-red-200 bg-red-50 p-4">
           <div className="flex items-center gap-2 mb-3">
             <AlertTriangle className="text-red-600" size={18} />
@@ -216,7 +171,7 @@ export default function HomePage({ data, onRefresh, onNavigate }: Props) {
                 <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
                 {alert}
               </div>
-            ))}git
+            ))}
           </div>
         </section>
       )}
