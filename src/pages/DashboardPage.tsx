@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import {
   Thermometer,
   Waves,
@@ -19,50 +20,50 @@ export default function DashboardPage({ data, history }: Props) {
   const alerts = getAlerts(data);
   const safe = alerts.length === 1 && alerts[0] === "Tank is Safe";
 
-  // ✅ ESP32 ONLINE/OFFLINE LOGIC (10s timeout)
-  const isOnline =
-    data?.timestamp &&
+  const isOnline = useMemo(() => {
+    if (!data?.timestamp) return false;
     // eslint-disable-next-line react-hooks/purity
-    Date.now() - new Date(data.timestamp).getTime() < 10000;
+    return Date.now() - new Date(data.timestamp).getTime() < 10000;
+  }, [data?.timestamp]);
 
   return (
     <>
-      {/* STAT CARDS */}
-      <div className="grid grid-cols-5 gap-3 mb-4">
+      {/* STAT CARDS - Responsive: 5 cols on XL, 3 on md, 2 on small */}
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-2 md:gap-3 mb-4">
         <StatCard
           title="Temperature"
           value={`${data?.temperature ?? 0}°C`}
           color="#f97316"
-          icon={<Thermometer size={21} />}
+          icon={<Thermometer size={18} />}
         />
         <StatCard
           title="Water Level"
-          value={`${data?.water_level ?? 0} cm`}
+          value={`${data?.water_level ?? 0}`}
           color="#2563eb"
-          icon={<Waves size={21} />}
+          icon={<Waves size={18} />}
         />
         <StatCard
           title="pH Level"
           value={`${data?.ph ?? 0}`}
           color="#6366f1"
-          icon={<FlaskConical size={21} />}
+          icon={<FlaskConical size={18} />}
         />
         <StatCard
           title="Ammonia"
           value={`${data?.ammonia ?? 0}`}
           color="#06b6d4"
-          icon={<AlertTriangle size={21} />}
+          icon={<AlertTriangle size={18} />}
         />
         <StatCard
           title="Dissolved O₂"
           value={`${data?.dissolved_oxygen ?? 0}`}
           color="#10b981"
-          icon={<Droplets size={21} />}
+          icon={<Droplets size={18} />}
         />
       </div>
 
-      {/* ✅ 3 SENSOR CHARTS ONLY */}
-      <div className="grid grid-cols-3 gap-3 mb-4">
+      {/* CHARTS - Responsive: 3 cols on XL, stack on mobile */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
         <TrendCard
           title="Temperature"
           data={history}
@@ -83,101 +84,80 @@ export default function DashboardPage({ data, history }: Props) {
         />
       </div>
 
-      {/* ALERT + HUB + TABLE */}
-      <div className="grid grid-cols-[1.2fr_2fr_1.2fr] gap-3 items-stretch">
+      {/* ALERT + HUB + TABLE - Responsive grid */}
+      <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
 
         {/* SENSOR HUB STATUS */}
-        <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm flex flex-col justify-between">
-          <div>
-            <div className="text-xs font-bold text-gray-500 mb-2">
-              Sensor Hub Status
-            </div>
-
-            <div className="text-sm font-semibold mb-2">
-              ESP32 Module
-            </div>
-
-            {/* ✅ UPDATED STATUS */}
-            <div className="flex items-center gap-2">
-              <span
-                className={`w-2.5 h-2.5 rounded-full ${isOnline ? "bg-green-500" : "bg-red-500"
-                  }`}
-              />
-              <span
-                className={`text-xs font-bold ${isOnline ? "text-green-600" : "text-red-600"
-                  }`}
-              >
-                {isOnline ? "ONLINE" : "OFFLINE"}
-              </span>
-            </div>
+        <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm md:col-span-3">
+          <div className="text-xs font-bold text-gray-500 mb-2">
+            Sensor Hub Status
           </div>
-
+          <div className="text-sm font-semibold mb-2">
+            ESP32 Module
+          </div>
+          <div className="flex items-center gap-2">
+            <span
+              className={`w-2.5 h-2.5 rounded-full ${isOnline ? "bg-green-500" : "bg-red-500"}`}
+            />
+            <span className={`text-xs font-bold ${isOnline ? "text-green-600" : "text-red-600"}`}>
+              {isOnline ? "ONLINE" : "OFFLINE"}
+            </span>
+          </div>
           <div className="text-xs text-gray-500 mt-4">
-            Updated{" "}
-            {data?.timestamp
-              ? new Date(data.timestamp).toLocaleTimeString()
-              : "N/A"}
+            Updated: {data?.timestamp ? new Date(data.timestamp).toLocaleTimeString() : "N/A"}
           </div>
         </div>
 
         {/* RECENT READINGS TABLE */}
-        <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm overflow-auto">
+        <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm overflow-auto md:col-span-6">
           <div className="text-xs font-bold text-gray-500 mb-3">
             Recent Readings
           </div>
-
-          <table className="w-full text-xs">
-            <thead className="text-gray-500">
-              <tr>
-                <th className="text-left">Time</th>
-                <th>Temp</th>
-                <th>Level</th>
-                <th>pH</th>
-                <th>NH₃</th>
-              </tr>
-            </thead>
-            <tbody>
-              {history.slice(-5).reverse().map((h, i) => (
-                <tr key={i} className="border-t">
-                  <td>{h.name}</td>
-                  <td className="text-center">{h.temperature}°C</td>
-                  <td className="text-center">{h.water_level} cm</td>
-                  <td className="text-center">{h.ph}</td>
-                  <td className="text-center">{h.ammonia}</td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs min-w-[200px]">
+              <thead className="text-gray-500">
+                <tr>
+                  <th className="text-left py-1">Time</th>
+                  <th className="text-center py-1">Temp</th>
+                  <th className="text-center py-1">Level</th>
+                  <th className="text-center py-1">pH</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {history.slice(-5).reverse().map((h, i) => (
+                  <tr key={i} className="border-t">
+                    <td className="py-1">{h.name}</td>
+                    <td className="text-center py-1">{h.temperature}°C</td>
+                    <td className="text-center py-1">{h.water_level}</td>
+                    <td className="text-center py-1">{h.ph}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
 
         {/* ALERT PANEL */}
-        <div className="flex flex-col gap-3">
-          <div className="bg-white rounded-xl border border-gray-100 p-3.5 shadow-sm">
+        <div className="flex flex-col gap-3 md:col-span-3">
+          <div className="bg-white rounded-xl border border-gray-100 p-3 shadow-sm">
             <div className="text-xs font-bold text-gray-500 mb-2">
-              Tank Alerts
+              Tank Status
             </div>
-            <div
-              className={`rounded-lg p-2 text-xs font-bold text-center ${safe
-                  ? "bg-emerald-100 text-emerald-700"
-                  : "bg-red-100 text-red-700"
-                }`}
-            >
+            <div className={`rounded-lg p-2 text-xs font-bold text-center ${safe ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}>
               {safe ? "Tank is Safe" : alerts[0]}
             </div>
           </div>
 
-          <div className="bg-orange-50 rounded-xl border border-orange-200 p-3.5 shadow-sm">
-            <div className="flex items-center gap-2 mb-2 text-orange-600 font-extrabold text-xs">
-              <AlertTriangle size={16} />
-              Current Reading
+          <div className="bg-orange-50 rounded-xl border border-orange-200 p-3 shadow-sm">
+            <div className="flex items-center gap-2 mb-2 text-orange-600 font-bold text-xs">
+              <AlertTriangle size={14} />
+              Temperature
             </div>
-
-            <div className="text-3xl font-extrabold text-red-500 mb-1.5">
+            <div className="text-2xl md:text-3xl font-extrabold text-red-500">
               {data?.temperature ?? 0}°C
             </div>
-
-            <div className="text-xs text-orange-800 leading-relaxed">
-              Water temperature is currently being monitored in real time.
+            <div className="text-xs text-orange-800 mt-1">
+              Real-time monitoring
             </div>
           </div>
         </div>
@@ -185,11 +165,10 @@ export default function DashboardPage({ data, history }: Props) {
 
       {/* DEVICE INFO */}
       <div className="mt-4 bg-white rounded-lg border border-gray-100 p-3 text-sm text-gray-600">
-        <strong>Device:</strong> {data?.device_id ?? "N/A"} <br />
-        <strong>Last Update:</strong>{" "}
-        {data?.timestamp
-          ? new Date(data.timestamp).toLocaleString()
-          : "N/A"}
+        <div className="flex flex-wrap gap-x-4 gap-y-1">
+          <span><strong>Device:</strong> {data?.device_id ?? "N/A"}</span>
+          <span><strong>Last Update:</strong> {data?.timestamp ? new Date(data.timestamp).toLocaleString() : "N/A"}</span>
+        </div>
       </div>
     </>
   );

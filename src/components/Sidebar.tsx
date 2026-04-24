@@ -6,6 +6,7 @@ import {
   History,
   Settings,
   Home,
+  FileText,
 } from "lucide-react";
 import type { MenuKey } from "../types";
 
@@ -15,6 +16,7 @@ const menuItems: { label: MenuKey; icon: React.ReactNode }[] = [
   { label: "Sensors", icon: <Activity size={15} /> },
   { label: "Alerts", icon: <Bell size={15} /> },
   { label: "Historical Data", icon: <History size={15} /> },
+  { label: "Logs", icon: <FileText size={15} /> },
   { label: "Settings", icon: <Settings size={15} /> },
 ];
 
