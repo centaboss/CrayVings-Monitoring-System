@@ -2,8 +2,6 @@ import axios, { isAxiosError, type AxiosError } from "axios";
 import type { SensorEntry, ChartPoint, LogEntry, SensorSettings, ActivityLog, ActivityLogEntry } from "../types";
 import { API_BASE } from "../types";
 
-console.log("API Base URL:", API_BASE);
-
 const client = axios.create({
   baseURL: API_BASE,
   timeout: 10000,
@@ -16,7 +14,7 @@ client.interceptors.response.use(
   (response) => response,
   (error: AxiosError) => {
     if (error.code !== "ECONNABORTED" && error.code !== "ERR_CANCELED") {
-      console.error("API Error:", error.message);
+      // Silent fail for network errors
     }
     return Promise.reject(error);
   }

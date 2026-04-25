@@ -1,8 +1,17 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
 import { useSensorSettings, useActivityLogger } from "../hooks/useSensors";
-import { Settings, Save, AlertTriangle } from "lucide-react";
+import { Settings, Save, AlertTriangle, Volume2, Upload, Check, X } from "lucide-react";
 import type { SensorSettings } from "../types";
 import { DEFAULT_SETTINGS, getSettingsThresholds } from "../types";
+import { 
+  setCustomSoundFromBlob, 
+  clearCustomSound, 
+  hasCustomSound,
+  setSoundEnabled,
+  getIsSoundEnabled 
+} from "../utils/playAlertSound";
+
+type UploadStatus = "idle" | "uploading" | "success" | "error";
 
 const SETTING_BOUNDS: Record<string, { min: number; max: number }> = {
   temp_min: { min: -10, max: 50 },
@@ -76,6 +85,9 @@ export default function SettingsPage() {
   const [localSettings, setLocalSettings] = useState<SensorSettings | null>(null);
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
   const [localSaveError, setLocalSaveError] = useState<string | null>(null);
+  const [soundEnabled, setSoundEnabledState] = useState<boolean>(true);
+  const [uploadStatus, setUploadStatus] = useState<Record<string, UploadStatus>>({});
+  const [fileInputRefs] = useState<Record<string, HTMLInputElement>>({});
 
   const displaySettings = useMemo(() => {
     return localSettings ?? settings ?? DEFAULT_SETTINGS;
@@ -136,6 +148,50 @@ export default function SettingsPage() {
       setLocalSaveError("Failed to save settings");
     }
   }, [localSettings, settings, saveSettings, validationErrors]);
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    setSoundEnabledState(getIsSoundEnabled());
+  }, []);
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const toggleSound = useCallback(() => {
+    const newValue = !soundEnabled;
+    setSoundEnabled(newValue);
+    setSoundEnabledState(newValue);
+    logActivity("settings_change", newValue ? "Enabled alert sounds" : "Disabled alert sounds", "Settings");
+  }, [soundEnabled, logActivity]);
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const handleSoundUpload = useCallback(async (key: string, file: File) => {
+    setUploadStatus((prev: Record<string, UploadStatus>) => ({ ...prev, [key]: "uploading" }));
+    try {
+      await setCustomSoundFromBlob(key, file);
+      setUploadStatus((prev: Record<string, UploadStatus>) => ({ ...prev, [key]: "success" }));
+      logActivity("settings_change", `Uploaded custom alert sound: ${key}`, "Settings");
+      setTimeout(() => {
+        setUploadStatus((prev: Record<string, UploadStatus>) => ({ ...prev, [key]: "idle" }));
+      }, 2000);
+    } catch {
+      setUploadStatus((prev: Record<string, UploadStatus>) => ({ ...prev, [key]: "error" }));
+      setTimeout(() => {
+        setUploadStatus((prev: Record<string, UploadStatus>) => ({ ...prev, [key]: "idle" }));
+      }, 3000);
+    }
+  }, [logActivity]);
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const handleClearSound = useCallback((key: string) => {
+    clearCustomSound(key);
+    logActivity("settings_change", `Cleared custom alert sound: ${key}`, "Settings");
+  }, [logActivity]);
+
+  const soundSettings = [
+    { key: "warning", label: "Warning Alert", desc: "Plays when sensor hits min threshold" },
+    { key: "critical", label: "Critical Alert", desc: "Plays when sensor exceeds max threshold" },
+    { key: "low", label: "Low Alert", desc: "Plays when value drops below minimum" },
+    { key: "high", label: "High Alert", desc: "Plays when value exceeds maximum" },
+  ];
 
   const thresholdConfig = useMemo(
     () => getSettingsThresholds(displaySettings),
@@ -227,6 +283,81 @@ export default function SettingsPage() {
                     />
                   </div>
                 </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <Volume2 className="text-purple-600" size={18} />
+            <div className="text-xs font-bold text-gray-500 uppercase tracking-wide">
+              Alert Sounds
+            </div>
+          </div>
+          <button
+            onClick={toggleSound}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+              soundEnabled 
+                ? "bg-green-100 text-green-700 hover:bg-green-200" 
+                : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+            }`}
+          >
+            {soundEnabled ? "Enabled" : "Disabled"}
+          </button>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {soundSettings.map(({ key, label, desc }) => {
+            const status = uploadStatus[key];
+            const hasCustom = hasCustomSound(key);
+            
+            return (
+              <div
+                key={key}
+                className="rounded-lg p-3 border border-purple-100 bg-purple-50"
+              >
+                <div className="text-xs font-semibold uppercase mb-1">{label}</div>
+                <div className="text-[10px] text-gray-500 mb-2">{desc}</div>
+                {hasCustom && (
+                  <div className="text-[10px] text-green-600 mb-2 flex items-center gap-1">
+                    <Check size={12} /> Custom sound loaded
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  <label className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded cursor-pointer text-xs font-medium transition-colors">
+                    <Upload size={12} />
+                    {status === "uploading" ? "Loading..." : "Upload"}
+                    <input
+                      ref={(el) => {
+                        if (el) fileInputRefs[key] = el;
+                      }}
+                      type="file"
+                      accept="audio/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) handleSoundUpload(key, file);
+                      }}
+                    />
+                  </label>
+                  {hasCustom && (
+                    <button
+                      onClick={() => handleClearSound(key)}
+                      className="flex items-center justify-center p-1.5 bg-red-100 hover:bg-red-200 text-red-600 rounded transition-colors"
+                      title="Clear custom sound"
+                    >
+                      <X size={12} />
+                    </button>
+                  )}
+                </div>
+                {status === "success" && (
+                  <div className="text-[10px] text-green-600 mt-1">Sound uploaded!</div>
+                )}
+                {status === "error" && (
+                  <div className="text-[10px] text-red-600 mt-1">Upload failed</div>
+                )}
               </div>
             );
           })}

@@ -1,32 +1,11 @@
-import { useState, useEffect, createContext, useContext, useCallback, type ReactNode } from "react";
+import { useState, useEffect, useCallback, type ReactNode } from "react";
 import { X, AlertTriangle, AlertCircle } from "lucide-react";
 import { playLowAlertSound, playHighAlertSound } from "../utils/playAlertSound";
-
-interface AlertNotification {
-  id: string;
-  message: string;
-  type: "warning" | "critical";
-  parameter: string;
-  value: number;
-  threshold: "min" | "max";
-}
-
-interface FloatingAlertContextType {
-  notifications: AlertNotification[];
-  addNotification: (notification: Omit<AlertNotification, "id">) => void;
-  removeNotification: (id: string) => void;
-  clearNotifications: () => void;
-}
-
-const FloatingAlertContext = createContext<FloatingAlertContextType | null>(null);
-
-export function useFloatingAlerts() {
-  const context = useContext(FloatingAlertContext);
-  if (!context) {
-    throw new Error("useFloatingAlerts must be used within FloatingAlertProvider");
-  }
-  return context;
-}
+import { 
+  FloatingAlertContext, 
+  useFloatingAlerts,
+  type AlertNotification
+} from "../hooks/useFloatingAlerts";
 
 interface FloatingAlertProviderProps {
   children: ReactNode;
@@ -35,23 +14,33 @@ interface FloatingAlertProviderProps {
 export function FloatingAlertProvider({ children }: FloatingAlertProviderProps) {
   const [notifications, setNotifications] = useState<AlertNotification[]>([]);
 
-  const addNotification = useCallback((notification: Omit<AlertNotification, "id">) => {
-    const id = `${notification.parameter}-${notification.threshold}-${Date.now()}`;
-    setNotifications((prev) => {
-      const exists = prev.some(
-        (n) => n.parameter === notification.parameter && n.threshold === notification.threshold
-      );
-      if (exists) return prev;
-      
-      if (notification.threshold === "min") {
-        playLowAlertSound();
+  const playAlertSound = useCallback(async (threshold: "min" | "max") => {
+    try {
+      if (threshold === "min") {
+        await playLowAlertSound();
       } else {
-        playHighAlertSound();
+        await playHighAlertSound();
       }
-      
-      return [...prev, { ...notification, id }];
-    });
+    } catch {
+      // Silent fail - audio may not work
+    }
   }, []);
+
+  const addNotification = useCallback(async (notification: Omit<AlertNotification, "id">) => {
+    const id = `${notification.parameter}-${notification.threshold}-${Date.now()}`;
+    
+    // Play sound FIRST before updating state
+    await playAlertSound(notification.threshold);
+    
+    // Always add new notification (allow multiple same alerts)
+    setNotifications((prev) => {
+      // Remove old notification for same sensor if exists
+      const filtered = prev.filter(
+        (n) => !(n.parameter === notification.parameter && n.threshold === notification.threshold)
+      );
+      return [...filtered, { ...notification, id }];
+    });
+  }, [playAlertSound]);
 
   const removeNotification = useCallback((id: string) => {
     setNotifications((prev) => prev.filter((n) => n.id !== id));
@@ -129,7 +118,7 @@ function FloatingAlertItem({ notification, onClose }: FloatingAlertItemProps) {
           {notification.message}
         </p>
         <p className="text-xs text-gray-500 mt-0.5">
-          Current: {notification.value} • Threshold: {notification.threshold === "min" ? "below min" : "above max"}
+          Current: {notification.value} - Threshold: {notification.threshold === "min" ? "below min" : "above max"}
         </p>
       </div>
       <button
