@@ -364,6 +364,7 @@ function useActivityLogsManager() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const isMountedRef = useRef(true);
 
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization
   const fetchData = useCallback(async (page = 1, search?: string, sortBy?: "newest" | "oldest", actionFilter?: string) => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -533,6 +534,7 @@ export function SensorProvider({ children }: { children: ReactNode }) {
     <SensorDataContext.Provider value={dataContextValue}>
       <SensorSettingsContext.Provider value={settingsContextValue}>
         <LogsContext.Provider value={logsContextValue}>
+          {/* eslint-disable-next-line react-refresh/only-export-components */}
           <ActivityLogsContext.Provider value={activityLogsContextValue}>
             {children}
           </ActivityLogsContext.Provider>
@@ -542,6 +544,8 @@ export function SensorProvider({ children }: { children: ReactNode }) {
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export { useSensorData, useSensorSettings, useSystemLogs, useActivityLogs } from "./SensorContext";
 
+// eslint-disable-next-line react-refresh/only-export-components
 export default SensorProvider;

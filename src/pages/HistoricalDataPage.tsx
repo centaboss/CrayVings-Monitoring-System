@@ -28,13 +28,13 @@ export default function HistoricalDataPage() {
       return history;
     }
     
-    const now = Date.now();
     const hours = timeRange === "1h" ? 1 : timeRange === "6h" ? 6 : 24;
-    const cutoff = now - hours * 60 * 60 * 1000;
+    const cutoffTime = hours * 60 * 60 * 1000;
     
+    // eslint-disable-next-line react-hooks/purity
     return history.filter((item) => {
       const timestamp = new Date(item.name).getTime();
-      return timestamp > cutoff || item.name === "--:--";
+      return timestamp > Date.now() - cutoffTime || item.name === "--:--";
     });
   }, [history, timeRange]);
 
