@@ -39,29 +39,32 @@ const menuItems: { label: MenuKey; icon: React.ReactNode }[] = [
   { label: "Logs", icon: <FileText size={18} /> },
 ];
 
+function getInitialMenuDefault(): MenuKey {
+  const saved = localStorage.getItem("activeMenu");
+  if (saved && isValidMenuKey(saved)) {
+    return saved;
+  }
+  return "Home";
+}
+
 function AppContent() {
   const { logActivity } = useActivityLogs();
   const previousMenuRef = useRef<MenuKey>("Home");
+  const activeMenuRef = useRef<MenuKey>(getInitialMenuDefault());
   useThresholdAlert();
 
-  const getInitialMenu = useCallback((): MenuKey => {
-    const saved = localStorage.getItem("activeMenu");
-    if (saved && isValidMenuKey(saved)) {
-      return saved;
-    }
-    return "Home";
-  }, []);
-
-  const [activeMenu, setActiveMenu] = useState<MenuKey>(getInitialMenu);
+  const [activeMenu, setActiveMenu] = useState<MenuKey>(getInitialMenuDefault);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const handleNavigate = useCallback((menu: MenuKey) => {
-    logActivity("navigation", `Navigated to ${menu}`, previousMenuRef.current);
-    previousMenuRef.current = activeMenu;
+    const prev = activeMenuRef.current;
+    logActivity("navigation", `Navigated to ${menu}`, prev);
+    previousMenuRef.current = prev;
+    activeMenuRef.current = menu;
     setActiveMenu(menu);
     localStorage.setItem("activeMenu", menu);
     setSidebarOpen(false);
-  }, [logActivity, activeMenu]);
+  }, [logActivity]);
 
   const renderPage = useCallback(() => {
     switch (activeMenu) {

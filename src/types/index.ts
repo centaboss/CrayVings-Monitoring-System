@@ -136,7 +136,19 @@ export function getThresholdStatus(
   if (isMinOnly) {
     return value >= range.min ? "good" : "warning";
   }
-  if (value < range.min || value > range.max) return "warning";
+  
+  const rangeSize = range.max - range.min;
+  const criticalMargin = rangeSize * 0.15;
+  
+  if (value < range.min) {
+    const deviation = range.min - value;
+    return deviation >= criticalMargin ? "critical" : "warning";
+  }
+  if (value > range.max) {
+    const deviation = value - range.max;
+    return deviation >= criticalMargin ? "critical" : "warning";
+  }
+  
   return "good";
 }
 
@@ -162,7 +174,16 @@ export function parseAlertSeverity(log: LogEntry): AlertSeverity {
   return "warning";
 }
 
-export const API_BASE = "http://localhost:3000";
+const DEFAULT_API_BASE = "http://localhost:3000";
+
+export function getApiBase(): string {
+  if (typeof import.meta !== "undefined" && import.meta.env) {
+    return import.meta.env.VITE_API_BASE || DEFAULT_API_BASE;
+  }
+  return DEFAULT_API_BASE;
+}
+
+export const API_BASE = getApiBase();
 
 export type ActivityLog = {
   id?: number;
