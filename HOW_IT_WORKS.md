@@ -7,7 +7,7 @@ The CRAYvings Monitoring System is an IoT-based aquaculture monitoring solution 
 ### Technology Stack
 
 | Component | Technology | Version |
-|-----------|-------------|---------|
+|-----------|------------|---------|
 | Frontend | React + TypeScript | React 19, TS 5.9 |
 | Build Tool | Vite | 8.0 |
 | Styling | Tailwind CSS | 4.2 |
@@ -66,22 +66,32 @@ The system continuously monitors five critical water parameters:
 - Real-time display updates every 3 seconds via polling
 - Visual indicators for sensor status (online/offline)
 - Timestamp tracking for all readings
+- Connection status detection (online/offline/unknown)
 
-### 2. Automated Alert System
+### 2. Intelligent Alert System
 
-The backend automatically generates alerts when sensor values exceed configured thresholds:
+The system now includes **smart alert cooldown** to prevent alert spam:
 
-- **Real-time threshold checking** on each sensor reading
-- **Severity classification**: Critical, Warning, Info
-- **Automatic logging** to system_logs table
-- **Visual alerts** in dashboard with color-coded cards
+- **Threshold detection** with severity classification
+- **Critical status** when values exceed 15% outside threshold range
+- **Warning status** when values are slightly outside range
+- **Smart alerting**: Only alerts on status transitions (not continuous)
+- **10-second cooldown** between repeated alerts for same parameter
+- **Automatic reset** when values return to safe range
+
+**Alert Severity Logic:**
+```
+value within 15% of threshold range: GOOD
+value 15%+ outside threshold:      CRITICAL (red)
+value slightly outside threshold:  WARNING (orange)
+```
 
 ### 3. Data-Driven Insights & Analytics
 
 - **Historical data analysis** with time range filtering (1h, 6h, 24h, all)
 - **Trend charts** for all parameters using Recharts
 - **Statistical summaries** on dashboard
-- **Export capability** via API endpoints
+- **Export capability** via print-to-PDF
 
 ### 4. Historical Data Analysis
 
@@ -110,6 +120,12 @@ The backend automatically generates alerts when sensor values exceed configured 
 - Log navigation, button clicks, form submissions
 - Filterable and searchable activity history
 - Pagination support
+
+### 8. Custom Alert Sounds
+
+- Synthetic audio tones (Web Audio API)
+- Custom sound upload capability
+- Sound enable/disable toggle
 
 ---
 
@@ -176,6 +192,7 @@ The React dashboard:
 2. **Display**: Shows real-time readings in cards and charts
 3. **Status**: Indicates connection status (online/offline)
 4. **Alerts**: Warns users when parameters exceed thresholds
+5. **Audio**: Plays alert sounds for threshold violations
 
 ---
 
@@ -192,6 +209,7 @@ The React dashboard:
 - If 5 consecutive polls fail, status changes to **OFFLINE**
 - Error message displayed: "Unable to connect to device"
 - Auto-retries continue even in offline state
+- Tracks consecutive failures count
 
 ### Reconnection
 
@@ -206,8 +224,10 @@ The React dashboard:
 ### How Alerts Work
 
 1. Backend compares sensor values against configured thresholds
-2. If value exceeds min/max range, an alert is logged
-3. Frontend displays alerts sorted by severity
+2. Frontend performs additional client-side threshold checking
+3. Status is classified as GOOD, WARNING, or CRITICAL
+4. Alerts are triggered only on status transitions
+5. Cooldown prevents repeated alerts for same condition
 
 ### Threshold Configuration
 
@@ -223,11 +243,12 @@ Users can configure thresholds in **Settings**:
 
 ### Alert Severity
 
-| Severity | Condition | Color |
-|----------|-----------|-------|
-| **Critical** | DO < 3 mg/L, Ammonia > 1 ppm, pH < 5 or > 9 | Red |
-| **Warning** | Any value outside configured range | Orange |
-| **Info** | System changes, settings updates | Blue |
+| Severity | Condition | Color | Behavior |
+|----------|-----------|-------|----------|
+| **Critical** | Value 15%+ outside range | Red | Immediate alert, repeated sound |
+| **Warning** | Value outside range but < 15% | Orange | Alert on status change |
+| **Info** | System changes, settings | Blue | Informational |
+| **Good** | Value within safe range | Green | No alert |
 
 ---
 
@@ -249,170 +270,9 @@ Users can configure thresholds in **Settings**:
 | `/activity-logs` | GET | Get activity | `?page=&limit=&search=&sortBy=` | `{data, total, page, limit, totalPages}` |
 | `/activity-logs` | POST | Create activity | `{action_type, description, module}` | `{message, data}` |
 
-### Request/Response Examples
-
-#### Health Check
-
-```bash
-GET /health
-```
-
-Response:
-```json
-{
-  "status": "ok",
-  "database": "connected",
-  "documents": 156,
-  "serverTime": "2026-04-25T12:00:00.000Z"
-}
-```
-
-#### Submit Sensor Data
-
-```bash
-POST /sensor
-Content-Type: application/json
-
-{
-  "device_id": "ESP32_01",
-  "temperature": 25.5,
-  "water_level": 80.0,
-  "ph": 7.2,
-  "dissolved_oxygen": 8.5,
-  "ammonia": 0.1
-}
-```
-
-Response:
-```json
-{
-  "message": "Saved to database",
-  "data": {
-    "id": 157,
-    "device_id": "ESP32_01",
-    "temperature": 25.5,
-    "water_level": 80.0,
-    "ph": 7.2,
-    "dissolved_oxygen": 8.5,
-    "ammonia": 0.1,
-    "timestamp": "2026-04-25T12:00:00.000Z"
-  }
-}
-```
-
-#### Get Latest Sensor
-
-```bash
-GET /sensor/latest
-```
-
-Response:
-```json
-{
-  "id": 157,
-  "device_id": "ESP32_01",
-  "temperature": 25.5,
-  "water_level": 80.0,
-  "ph": 7.2,
-  "dissolved_oxygen": 8.5,
-  "ammonia": 0.1,
-  "timestamp": "2026-04-25T12:00:00.000Z"
-}
-```
-
-#### Get Settings
-
-```bash
-GET /settings
-```
-
-Response:
-```json
-{
-  "id": 1,
-  "temp_min": 20.0,
-  "temp_max": 31.0,
-  "ph_min": 6.5,
-  "ph_max": 8.5,
-  "do_min": 5.0,
-  "do_max": 10.0,
-  "water_level_min": 10.0,
-  "water_level_max": 100.0,
-  "ammonia_min": 0.0,
-  "ammonia_max": 0.5
-}
-```
-
-#### Update Settings
-
-```bash
-POST /settings
-Content-Type: application/json
-
-{
-  "temp_min": 18.0,
-  "temp_max": 32.0,
-  "ph_min": 6.0,
-  "ph_max": 9.0
-}
-```
-
-Response:
-```json
-{
-  "message": "Settings saved",
-  "data": { ... }
-}
-```
-
-#### Get System Logs
-
-```bash
-GET /system-logs?page=1&limit=20
-```
-
-Response:
-```json
-{
-  "data": [
-    {
-      "id": 45,
-      "action": "Alert",
-      "parameter": "Temperature",
-      "old_value": "High",
-      "new_value": "32.5",
-      "timestamp": "2026-04-25T11:45:00Z"
-    }
-  ],
-  "total": 45
-}
-```
-
-### Error Handling & Status Codes
-
-| Status Code | Meaning | Description |
-|------------|---------|-------------|
-| 200 | OK | Request succeeded |
-| 201 | Created | Resource created successfully |
-| 400 | Bad Request | Invalid request body or validation error |
-| 404 | Not Found | No data found |
-| 500 | Server Error | Internal server error |
-
-#### Validation Error Response
-
-```json
-{
-  "message": "Validation error",
-  "errors": {
-    "temperature": ["Number must be greater than or equal to -10"],
-    "ph": ["Required"]
-  }
-}
-```
-
 ---
 
-## Expanded Backend Functionality
+## Backend Functionality
 
 ### Data Validation & Sanitization
 
@@ -453,102 +313,63 @@ const pool = new Pool({
 });
 ```
 
-### Middleware
-
-#### CORS Configuration
-
-```javascript
-const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "http://localhost:5173,http://localhost:5174").split(",");
-app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin || ALLOWED_ORIGINS.includes(origin) || origin.startsWith("http://localhost:")) {
-      callback(null, true);
-    } else {
-      callback(new Error("Not allowed by CORS"));
-    }
-  },
-  methods: ["GET", "POST"],
-  allowedHeaders: ["Content-Type"],
-}));
-```
-
-#### Request Logging
-
-All requests are logged with timestamps:
-
-```javascript
-console.log(`[${new Date().toISOString()}] Sensor data saved:`, data);
-```
-
 ---
 
-## Enhanced Frontend Functionality
+## Frontend Architecture
 
 ### Component Hierarchy
 
 ```
 App
-├── SensorProvider (data context)
+├── SensorProvider (main data context)
 │   ├── useSensorDataPolling (3s interval)
 │   ├── useSettingsManager
 │   ├── useLogsManager (5s interval)
 │   └── useActivityLogsManager
-├── Router
-│   ├── Header
-│   ├── Sidebar
-│   └── Pages
-│       ├── HomePage
-│       ├── DashboardPage
-│       ├── SensorsPage
-│       ├── AlertsPage
-│       ├── HistoricalDataPage
-│       ├── SettingsPage
-│       ├── LogsPage
-│       └── ActivityLogsPage
-└── Components
-    ├── StatCard
-    ├── TrendCard
-    └── ...
+├── FloatingAlertProvider (toast notifications)
+├── Header (top bar)
+├── Sidebar (navigation)
+└── Pages
+    ├── HomePage
+    ├── DashboardPage
+    ├── SensorsPage
+    ├── AlertsPage
+    ├── HistoricalDataPage
+    ├── SettingsPage
+    ├── LogsPage
+    └── ActivityLogsPage
 ```
 
 ### State Management Approach
 
 The application uses React Context with custom hooks:
 
-1. **SensorDataContext**: Real-time sensor data
+1. **SensorDataContext**: Real-time sensor data, history, connection status
 2. **SensorSettingsContext**: Threshold configuration
 3. **LogsContext**: System logs with pagination
 4. **ActivityLogsContext**: User activity tracking
+5. **FloatingAlertContext**: Toast notifications
 
 ### Real-Time Polling Mechanism
 
 ```typescript
 const POLL_INTERVAL = 3000; // 3 seconds
 const MAX_CONSECUTIVE_FAILURES = 5;
+const OFFLINE_THRESHOLD = 15000; // 15 seconds
 
-useEffect(() => {
-  fetchData();
-  intervalRef.current = setInterval(fetchData, POLL_INTERVAL);
-  return () => clearInterval(intervalRef.current);
-}, []);
+// Uses AbortController for request cancellation
+// Tracks consecutive failures for offline detection
 ```
 
-### Chart Visualization
+### Alert Cooldown Logic
 
-Using **Recharts** for data visualization:
+```typescript
+const ALERT_COOLDOWN_MS = 10000; // 10 seconds
 
-- Line charts for trend analysis
-- Real-time data updates
-- Time-based filtering
-- Responsive design
-
-### Alert Configuration
-
-The Settings page allows:
-- Min/max threshold configuration
-- Real-time validation
-- Range checking (min < max)
-- Activity logging
+// Only alerts on status transitions
+// Resets alert flag when value returns to good range
+// Cooldown prevents alert spam
+```
 
 ---
 
@@ -564,20 +385,6 @@ Method: POST
 Content-Type: application/json
 URL: http://<server>:3000/sensor
 Baud Rate: 19200
-```
-
-### Data Transmission Format
-
-```json
-{
-  "device_id": "ESP32_01",
-  "temperature": 25.50,
-  "water_level": 75.00,
-  "ph": 7.20,
-  "dissolved_oxygen": 8.50,
-  "ammonia": 0.10,
-  "timestamp": "2026-04-25T12:00:00Z"
-}
 ```
 
 ### Network Requirements
@@ -597,14 +404,6 @@ Baud Rate: 19200
 | DO Sensor | Analog | 0 - 20 mg/L | ±0.2 mg/L | (optional) |
 | Ammonia | Analog | 0 - 10 ppm | ±0.1 ppm | (optional) |
 
-### ESP32 Firmware Features
-
-- **WiFi connectivity** with auto-reconnect
-- **Sensor averaging** (5 samples for stability)
-- **JSON payload construction**
-- **Error handling** for failed requests
-- **Serial debugging** at 19200 baud
-
 ---
 
 ## Project Structure
@@ -612,34 +411,37 @@ Baud Rate: 19200
 ```
 src/
 ├── api/
-│   └── client.ts           # Centralized API client with AbortController
+│   └── client.ts           # Axios API client with AbortController
 ├── components/
-│   ├── Header.tsx          # Top navigation bar
-│   ├── Sidebar.tsx         # Side menu navigation
-│   ├── StatCard.tsx        # Metric display card
-│   └── TrendCard.tsx       # Line chart component
+│   ├── Header.tsx         # Top navigation bar
+│   ├── Sidebar.tsx        # Side menu navigation (mobile)
+│   ├── StatCard.tsx       # Metric display card
+│   ├── TrendCard.tsx      # Line chart component
+│   └── FloatingAlert.tsx  # Toast notifications
 ├── contexts/
-│   ├── SensorContext.tsx   # Context interfaces
-│   └── SensorProvider.tsx  # Data fetching hooks (polling)
+│   ├── SensorContext.tsx # Context interfaces
+│   └── SensorProvider.tsx # Data fetching hooks (polling)
 ├── hooks/
-│   └── useSensors.ts       # Consolidated data access hook
+│   ├── useSensors.ts     # Consolidated data access hook
+│   ├── useThresholdAlert.ts # Alert threshold monitoring
+│   └── useFloatingAlerts.ts # Alert context
 ├── pages/
-│   ├── HomePage.tsx        # Landing page with status overview
-│   ├── DashboardPage.tsx   # Main monitoring view
-│   ├── SensorsPage.tsx     # Individual sensor details
-│   ├── AlertsPage.tsx      # Alert history
-│   ├── HistoricalDataPage.tsx  # Trend charts
-│   ├── SettingsPage.tsx    # Threshold configuration
-│   ├── LogsPage.tsx        # System log viewer
-│   └── ActivityLogsPage.tsx  # User activity tracking
+│   ├── HomePage.tsx       # Landing page with status overview
+│   ├── DashboardPage.tsx # Main monitoring view
+│   ├── SensorsPage.tsx   # Individual sensor details
+│   ├── AlertsPage.tsx   # Alert history
+│   ├── HistoricalDataPage.tsx # Trend charts
+│   ├── SettingsPage.tsx  # Threshold configuration
+│   ├── LogsPage.tsx     # System log viewer
+│   └── ActivityLogsPage.tsx # User activity tracking
 ├── types/
-│   └── index.ts            # TypeScript types and helpers
-├── App.tsx                 # Main app with routing
-├── main.tsx                # Entry point
-└── index.css              # Tailwind styles
-server.cjs                  # Express backend server
-esp32code/
-└── esp32code.ino         # ESP32 firmware
+│   └── index.ts         # TypeScript types and helpers
+├── utils/
+│   └── playAlertSound.ts # Web Audio API for alerts
+├── App.tsx             # Main app layout
+├── main.tsx           # Entry point
+└── index.css           # Tailwind styles
+server.cjs             # Express backend server
 ```
 
 ---
@@ -664,7 +466,7 @@ Expected output:
 npm run dev
 ```
 
-Dashboard available at http://localhost:5173 (or 5174 if port in use)
+Dashboard available at http://localhost:5173
 
 ### 3. ESP32
 
@@ -693,19 +495,15 @@ PG_DATABASE=crayvings_monitoring_system_db
 PG_USER=postgres
 PG_PASSWORD=your_password
 
-# ESP32 Configuration
-ARDUINO_ENABLED=true
-ARDUINO_PORT=COM3
-ARDUINO_BAUD=19200
-DEVICE_ID=ARDUINO_001
-POLL_INTERVAL=5000
+# CORS Configuration
+ALLOWED_ORIGINS=http://localhost:5173,http://localhost:5174
 ```
 
 ### Frontend
 
 ```bash
 # Optional - defaults to http://localhost:3000
-VITE_API_URL=http://localhost:3000
+VITE_API_BASE=http://localhost:3000
 ```
 
 ---
@@ -739,8 +537,7 @@ CREATE TABLE system_logs (
   parameter VARCHAR(100) NOT NULL,
   old_value VARCHAR(50),
   new_value VARCHAR(50),
-  timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+  timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
 
 CREATE INDEX idx_system_logs_timestamp ON system_logs(timestamp DESC);
 ```
@@ -760,8 +557,7 @@ CREATE TABLE sensor_settings (
   water_level_max DECIMAL(5,2) DEFAULT 100.0,
   ammonia_min DECIMAL(5,2) DEFAULT 0.0,
   ammonia_max DECIMAL(5,2) DEFAULT 0.5,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
 ```
 
 ### Activity Logs Table
@@ -773,8 +569,7 @@ CREATE TABLE activity_logs (
   action_type VARCHAR(50) NOT NULL,
   description TEXT,
   module VARCHAR(100),
-  timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+  timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
 
 CREATE INDEX idx_activity_logs_timestamp ON activity_logs(timestamp DESC);
 CREATE INDEX idx_activity_logs_action_type ON activity_logs(action_type);
@@ -783,8 +578,6 @@ CREATE INDEX idx_activity_logs_action_type ON activity_logs(action_type);
 ---
 
 ## Debugging Guide
-
-This section helps you diagnose and fix connection issues between ESP32, backend, and frontend.
 
 ### Quick Status Check
 
@@ -819,28 +612,32 @@ curl -X POST http://localhost:3000/sensor \
 | Issue | Cause | Solution |
 |-------|-------|---------|
 | "Connection refused" | Server not running | Start `node server.cjs` |
-| "Invalid URL" | Empty API URL | Set `API_BASE` in types/index.ts |
-| CORS error | Wrong port | Add port to ALLOWED_ORIGINS |
-| Data not showing | CORS or wrong IP | Check server config |
+| "Invalid URL" | Empty API URL | Set `VITE_API_BASE` or check `types/index.ts` |
+| CORS error | Wrong port | Add port to `ALLOWED_ORIGINS` in server |
+| Data not showing | Wrong IP | Check server config in frontend |
+| "Device offline" | ESP32 not connected | Check WiFi, restart ESP32 |
+| Alert spam | Frequent threshold breaches | Adjust threshold settings |
 
 ---
 
-## Performance Metrics & Scalability
+## Performance Metrics
 
 ### Current Performance
 
 - **Polling interval**: 3 seconds
+- **Logs polling interval**: 5 seconds
 - **Request timeout**: 10 seconds
 - **Connection pool**: 20 max connections
-- **Idle timeout**: 30 seconds
-- **Page size**: 20 items default, 100 max
+- **Page size**: 20 items default
+- **Alert cooldown**: 10 seconds
+- **Offline threshold**: 15 seconds
 
 ### Scalability Considerations
 
 - Database indexing on timestamp columns
 - Connection pooling for multiple clients
 - Pagination for large datasets
-- Client-side data caching
+- AbortController for request cancellation
 
 ---
 
@@ -851,32 +648,15 @@ curl -X POST http://localhost:3000/sensor \
 - CORS origin validation
 - Input validation with Zod
 - SQL parameterized queries (pg)
-- No sensitive data in frontend
+- No sensitive data stored
 
-### Recommendations for Production
+### Production Recommendations
 
 1. Add authentication
 2. Use HTTPS
 3. Implement rate limiting
 4. Add API keys/session tokens
 5. Enable database encryption
-6. Regular security audits
-
----
-
-## Data Retention
-
-### Current Policy
-
-- All sensor data stored indefinitely
-- No automatic cleanup
-- Manual deletion via SQL
-
-### Recommendations
-
-- Implement archival for old data
-- Set retention policy (e.g., 1 year)
-- Regular database maintenance
 
 ---
 
@@ -887,50 +667,6 @@ curl -X POST http://localhost:3000/sensor \
 3. **Multi-Pond Support** - Multiple tank monitoring
 4. **Export Features** - CSV/PDF export
 5. **Data Analysis** - ML-based predictions
-6. **API v2** - RESTful redesign
-7. **WebSocket** - Real-time updates
-8. **Multi-user** - Role-based access
-
----
-
-## API Rate Limits & Best Practices
-
-### Current Limits
-
-- No rate limiting implemented
-- Unrestricted polling
-
-### Recommended Practices
-
-1. **Poll responsibly** - 3s interval is reasonable
-2. **Use AbortController** - Cancel stale requests
-3. **Handle errors gracefully** - Show user-friendly messages
-4. **Validate inputs** - Check data before sending
-5. **Monitor performance** - Track response times
-
----
-
-## Troubleshooting Checklist
-
-Run through this checklist in order:
-
-1. [ ] Backend running? (`node server.cjs` shows no errors)
-2. [ ] Frontend running? (`npm run dev` shows local URL)
-3. [ ] Database has data? (`SELECT COUNT(*) FROM sensors`)
-4. [ ] Browser console shows correct API URL?
-5. [ ] Network tab shows successful requests?
-6. [ ] No CORS errors in console?
-
-### Restart All Services
-
-```bash
-# 1. Stop all servers (Ctrl+C)
-
-# 2. Start backend
-node server.cjs
-
-# 3. Start frontend
-npm run dev
-
-# 4. Refresh browser
-```
+6. **WebSocket** - Real-time updates instead of polling
+7. **Multi-user** - Role-based access
+8. **Export API** - Public API for integrations

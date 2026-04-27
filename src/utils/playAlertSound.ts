@@ -104,10 +104,10 @@ async function playTone(frequency: number, duration: number, type: OscillatorTyp
 
     await new Promise(resolve => setTimeout(resolve, duration * 1000 + 50));
   } catch {
-    // Silent fail - audio may not work
+    // Audio error - fail silently, playback continues
   } finally {
-    try { oscillator?.disconnect(); } catch {}
-    try { gainNode?.disconnect(); } catch {}
+    if (oscillator) { try { oscillator.disconnect(); } catch { /* ignore */ } }
+    if (gainNode) { try { gainNode.disconnect(); } catch { /* ignore */ } }
   }
 }
 
@@ -130,10 +130,10 @@ async function playCustomSound(audioBuffer: AudioBuffer): Promise<void> {
       if (source) { source.onended = resolve; }
     });
   } catch {
-    // Silent fail
+    // Audio error - fail silently
   } finally {
-    try { source?.disconnect(); } catch {}
-    try { gainNode?.disconnect(); } catch {}
+    if (source) { try { source.disconnect(); } catch { /* ignore */ } }
+    if (gainNode) { try { gainNode.disconnect(); } catch { /* ignore */ } }
   }
 }
 

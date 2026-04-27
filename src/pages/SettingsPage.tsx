@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { useSensorSettings, useActivityLogger } from "../hooks/useSensors";
 import { Settings, Save, AlertTriangle, Volume2, Upload, Check, X } from "lucide-react";
 import type { SensorSettings } from "../types";
@@ -7,7 +7,6 @@ import {
   setCustomSoundFromBlob, 
   clearCustomSound, 
   hasCustomSound,
-  setSoundEnabled,
   getIsSoundEnabled 
 } from "../utils/playAlertSound";
 
@@ -85,19 +84,21 @@ export default function SettingsPage() {
   const [localSettings, setLocalSettings] = useState<SensorSettings | null>(null);
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
   const [localSaveError, setLocalSaveError] = useState<string | null>(null);
-  const [soundEnabled, setSoundEnabledState] = useState<boolean>(true);
   const [uploadStatus, setUploadStatus] = useState<Record<string, UploadStatus>>({});
   const [fileInputRefs] = useState<Record<string, HTMLInputElement>>({});
+  const soundEnabledState = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      return getIsSoundEnabled();
+    }
+    return true;
+  });
+  const [, setSoundEnabledTrigger] = useState(0);
 
   const displaySettings = useMemo(() => {
     return localSettings ?? settings ?? DEFAULT_SETTINGS;
   }, [localSettings, settings]);
 
-  useEffect(() => {
-    if (settings && !localSettings) {
-      setLocalSettings(settings);
-    }
-  }, [settings, localSettings]);
+  const soundEnabled = soundEnabledState[0];
 
   const updateSetting = useCallback((key: keyof SensorSettings, value: string) => {
     const numValue = parseFloat(value);
@@ -147,22 +148,14 @@ export default function SettingsPage() {
     } catch {
       setLocalSaveError("Failed to save settings");
     }
-  }, [localSettings, settings, saveSettings, validationErrors]);
+  }, [localSettings, settings, saveSettings, validationErrors, logActivity]);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    setSoundEnabledState(getIsSoundEnabled());
-  }, []);
-
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   const toggleSound = useCallback(() => {
     const newValue = !soundEnabled;
-    setSoundEnabled(newValue);
-    setSoundEnabledState(newValue);
+    setSoundEnabledTrigger(prev => prev + 1);
     logActivity("settings_change", newValue ? "Enabled alert sounds" : "Disabled alert sounds", "Settings");
-  }, [soundEnabled, logActivity]);
+  }, [logActivity, soundEnabled]);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   const handleSoundUpload = useCallback(async (key: string, file: File) => {
     setUploadStatus((prev: Record<string, UploadStatus>) => ({ ...prev, [key]: "uploading" }));
     try {
@@ -180,7 +173,6 @@ export default function SettingsPage() {
     }
   }, [logActivity]);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   const handleClearSound = useCallback((key: string) => {
     clearCustomSound(key);
     logActivity("settings_change", `Cleared custom alert sound: ${key}`, "Settings");

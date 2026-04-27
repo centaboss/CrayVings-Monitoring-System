@@ -1,9 +1,10 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useMemo } from "react";
 import { useSensorData, useSensorSettings } from "../contexts/SensorContext";
 import { useFloatingAlerts } from "../hooks/useFloatingAlerts";
-import { getSettingsThresholds, getThresholdStatus } from "../types";
+import { getSettingsThresholds, getThresholdStatus, type ThresholdStatus } from "../types";
 
 const ALERT_COOLDOWN_MS = 10000;
+const SENSOR_KEYS = ["temperature", "water_level", "ph", "dissolved_oxygen", "ammonia"] as const;
 
 function toNumber(value: string | number | undefined): number {
   if (typeof value === "number") return value;
@@ -17,65 +18,63 @@ export function useThresholdAlert() {
   const { addNotification } = useFloatingAlerts();
   
   const lastAlertTimeRef = useRef<Record<string, number>>({});
-  const hasAlertedRef = useRef<Record<string, boolean>>({});
+  const previousStatusRef = useRef<Record<string, ThresholdStatus>>({});
+
+  const thresholds = useMemo(
+    () => settings ? getSettingsThresholds(settings) : null,
+    [settings]
+  );
 
   const checkThresholds = useCallback(() => {
-    if (loading || !data || !settings) {
+    if (loading || !data || !thresholds) {
       return;
     }
 
-    const thresholds = getSettingsThresholds(settings);
     const now = Date.now();
 
-    const sensorKeys = [
-      "temperature",
-      "water_level",
-      "ph",
-      "dissolved_oxygen",
-      "ammonia",
-    ] as const;
-
-    for (const key of sensorKeys) {
+    for (const key of SENSOR_KEYS) {
       const value = toNumber(data[key] as string | number);
       if (isNaN(value)) continue;
 
       const config = thresholds[key];
       if (!config) continue;
 
-      const status = getThresholdStatus(value, config.range, config.isMinOnly);
+      const newStatus = getThresholdStatus(value, config.range, config.isMinOnly);
+      const previousStatus = previousStatusRef.current[key];
       
-      if (status !== "good") {
+      if (newStatus !== "good" && (previousStatus === "good" || previousStatus === undefined)) {
         const isBelowMin = value < config.range.min;
         const thresholdType = isBelowMin ? "min" : "max";
         const alertKey = `${key}-${thresholdType}`;
         
-        const timeSinceLastAlert = now - (lastAlertTimeRef.current[alertKey] || 0);
+        const lastAlertTime = lastAlertTimeRef.current[alertKey] || 0;
+        const timeSinceLastAlert = now - lastAlertTime;
         
-        // Alert if: never alerted OR cooldown expired
-        const shouldAlert = !hasAlertedRef.current[alertKey] || timeSinceLastAlert > ALERT_COOLDOWN_MS;
-        
-        if (shouldAlert) {
+        if (timeSinceLastAlert > ALERT_COOLDOWN_MS) {
           const prefix = isBelowMin ? "Low" : "High";
           const message = `${prefix} ${config.name}: ${value}${config.unit} is ${isBelowMin ? "below" : "above"} threshold (${config.range.min}${config.unit} - ${config.range.max}${config.unit})`;
 
           lastAlertTimeRef.current[alertKey] = now;
-          hasAlertedRef.current[alertKey] = true;
           
           addNotification({
             message,
-            type: status === "critical" ? "critical" : "warning",
+            type: newStatus === "critical" ? "critical" : "warning",
             parameter: key,
             value,
             threshold: thresholdType,
           });
         }
-      } else {
-        // Reset alert flag when value returns to good range
-        hasAlertedRef.current[`${key}-min`] = false;
-        hasAlertedRef.current[`${key}-max`] = false;
+      }
+      
+      if (newStatus === "good") {
+        previousStatusRef.current[key] = "good";
+      } else if (previousStatus !== "good" && previousStatus !== undefined) {
+        previousStatusRef.current[key] = newStatus;
+      } else if (previousStatus === undefined) {
+        previousStatusRef.current[key] = newStatus;
       }
     }
-  }, [data, settings, loading, addNotification]);
+  }, [data, thresholds, loading, addNotification]);
 
   useEffect(() => {
     checkThresholds();
