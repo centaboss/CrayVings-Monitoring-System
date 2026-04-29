@@ -3,7 +3,7 @@ import { useSensorData, useSensorSettings } from "../contexts/SensorContext";
 import { useFloatingAlerts } from "../hooks/useFloatingAlerts";
 import { getSettingsThresholds, getThresholdStatus, type ThresholdStatus } from "../types";
 
-const ALERT_COOLDOWN_MS = 10000;
+const ALERT_COOLDOWN_MS = 60000; // 60 seconds to avoid spam
 const SENSOR_KEYS = ["temperature", "water_level", "ph", "dissolved_oxygen", "ammonia"] as const;
 
 function toNumber(value: string | number | undefined): number {
@@ -42,36 +42,35 @@ export function useThresholdAlert() {
       const newStatus = getThresholdStatus(value, config.range, config.isMinOnly);
       const previousStatus = previousStatusRef.current[key];
       
-      if (newStatus !== "good" && (previousStatus === "good" || previousStatus === undefined)) {
-        const isBelowMin = value < config.range.min;
-        const thresholdType = isBelowMin ? "min" : "max";
-        const alertKey = `${key}-${thresholdType}`;
-        
-        const lastAlertTime = lastAlertTimeRef.current[alertKey] || 0;
-        const timeSinceLastAlert = now - lastAlertTime;
-        
-        if (timeSinceLastAlert > ALERT_COOLDOWN_MS) {
-          const prefix = isBelowMin ? "Low" : "High";
-          const message = `${prefix} ${config.name}: ${value}${config.unit} is ${isBelowMin ? "below" : "above"} threshold (${config.range.min}${config.unit} - ${config.range.max}${config.unit})`;
-
-          lastAlertTimeRef.current[alertKey] = now;
-          
-          addNotification({
-            message,
-            type: newStatus === "critical" ? "critical" : "warning",
-            parameter: key,
-            value,
-            threshold: thresholdType,
-          });
-        }
+      // Update previous status
+      previousStatusRef.current[key] = newStatus;
+      
+      // Only proceed if we're in an alert state (not good)
+      if (newStatus === "good") {
+        continue;
       }
       
-      if (newStatus === "good") {
-        previousStatusRef.current[key] = "good";
-      } else if (previousStatus !== "good" && previousStatus !== undefined) {
-        previousStatusRef.current[key] = newStatus;
-      } else if (previousStatus === undefined) {
-        previousStatusRef.current[key] = newStatus;
+      const isBelowMin = value < config.range.min;
+      const thresholdType = isBelowMin ? "min" : "max";
+      const alertKey = `${key}-${thresholdType}`;
+      
+      const lastAlertTime = lastAlertTimeRef.current[alertKey] || 0;
+      const timeSinceLastAlert = now - lastAlertTime;
+      
+      // Send alert if cooldown has passed
+      if (timeSinceLastAlert > ALERT_COOLDOWN_MS) {
+        const prefix = isBelowMin ? "Low" : "High";
+        const message = `${prefix} ${config.name}: ${value}${config.unit} is ${isBelowMin ? "below" : "above"} threshold (${config.range.min}${config.unit} - ${config.range.max}${config.unit})`;
+
+        lastAlertTimeRef.current[alertKey] = now;
+        
+        addNotification({
+          message,
+          type: newStatus === "critical" ? "critical" : "warning",
+          parameter: key,
+          value,
+          threshold: thresholdType,
+        });
       }
     }
   }, [data, thresholds, loading, addNotification]);

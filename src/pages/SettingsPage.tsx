@@ -246,7 +246,7 @@ export default function SettingsPage() {
                     <input
                       type="number"
                       step="0.1"
-                      value={displaySettings[keys.min] ?? threshold.range.min}
+                      value={displaySettings[keys.min] != null ? Number(displaySettings[keys.min]) : threshold.range.min}
                       onChange={(e) => updateSetting(keys.min, e.target.value)}
                       className={`w-full px-2 py-1.5 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent ${
                         validationErrors[keys.min]
@@ -265,7 +265,7 @@ export default function SettingsPage() {
                     <input
                       type="number"
                       step="0.1"
-                      value={displaySettings[keys.max] ?? threshold.range.max}
+                      value={displaySettings[keys.max] != null ? Number(displaySettings[keys.max]) : threshold.range.max}
                       onChange={(e) => updateSetting(keys.max, e.target.value)}
                       className={`w-full px-2 py-1.5 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent ${
                         validationErrors[keys.max]

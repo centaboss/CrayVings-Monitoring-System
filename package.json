@@ -8,8 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "server": "node server.js",
-    "start": "node server.js"
+    "server": "node server.cjs",
+    "start": "node server.cjs"
   },
   "dependencies": {
     "axios": "^1.15.2",

@@ -1,5 +1,6 @@
 const express = require("express");
 const cors = require("cors");
+const axios = require("axios");
 const { Pool } = require("pg");
 const { z } = require("zod");
 require("dotenv").config();
@@ -357,7 +358,7 @@ app.post("/settings", async (req, res) => {
     } else {
       result = await pool.query(
         `INSERT INTO sensor_settings (temp_min, temp_max, ph_min, ph_max, do_min, do_max, water_level_min, water_level_max, ammonia_min, ammonia_max)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
         [temp_min, temp_max, ph_min, ph_max, do_min, do_max, water_level_min, water_level_max, ammonia_min, ammonia_max]
       );
     }
@@ -482,13 +483,13 @@ async function startServer() {
         )
       `);
       
-      await client.query(`
-        ALTER TABLE sensor_settings ADD COLUMN IF NOT EXISTS do_max DECIMAL(5,2) DEFAULT 10.0
-      `);
-      
-      await client.query(`
-        ALTER TABLE sensor_settings ADD COLUMN IF NOT EXISTS ammonia_min DECIMAL(5,2) DEFAULT 0.0
-      `);
+        await client.query(`
+          ALTER TABLE sensor_settings ADD COLUMN IF NOT EXISTS do_max DECIMAL(5,2) DEFAULT 10.0
+        `);
+        
+        await client.query(`
+          ALTER TABLE sensor_settings ADD COLUMN IF NOT EXISTS ammonia_min DECIMAL(5,2) DEFAULT 0.0
+        `);
 
       await client.query(`
         CREATE TABLE IF NOT EXISTS activity_logs (
