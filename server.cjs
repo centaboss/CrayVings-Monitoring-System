@@ -8,14 +8,27 @@ require("dotenv").config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const ALERT_DEDUP_INTERVAL_MS = 60 * 60 * 1000;
+function getThresholdStatus(value, min, max) {
+  const rangeSize = max - min;
+  const criticalMargin = rangeSize * 0.15;
+
+  if (value < min) {
+    const deviation = min - value;
+    return deviation >= criticalMargin ? "critical" : "warning";
+  }
+  if (value > max) {
+    const deviation = value - max;
+    return deviation >= criticalMargin ? "critical" : "warning";
+  }
+  return "good";
+}
 
 const lastAlertedState = {
-  Temperature: { value: null, timestamp: null },
-  "pH Level": { value: null, timestamp: null },
-  "Dissolved Oxygen": { value: null, timestamp: null },
-  "Water Level": { value: null, timestamp: null },
-  Ammonia: { value: null, timestamp: null },
+  Temperature: { status: null, value: null, timestamp: null },
+  "pH Level": { status: null, value: null, timestamp: null },
+  "Dissolved Oxygen": { status: null, value: null, timestamp: null },
+  "Water Level": { status: null, value: null, timestamp: null },
+  Ammonia: { status: null, value: null, timestamp: null },
 };
 
 app.use(express.json());
@@ -139,48 +152,45 @@ app.post("/sensor", async (req, res) => {
       ammonia_min: 0.0, ammonia_max: 0.5
     };
 
-    const alerts = [];
-    const tempVal = Number(temperature);
-    const phVal = Number(ph);
-    const doVal = Number(dissolved_oxygen);
-    const wlVal = Number(water_level);
-    const ammVal = Number(ammonia);
+    const now = new Date();
+    const nowTs = now.getTime();
 
-    if (tempVal < settings.temp_min || tempVal > settings.temp_max) {
-      alerts.push({ parameter: "Temperature", old_value: tempVal < settings.temp_min ? "Low" : "High", new_value: tempVal });
-    }
-    if (phVal < settings.ph_min || phVal > settings.ph_max) {
-      alerts.push({ parameter: "pH Level", old_value: phVal < settings.ph_min ? "Low" : "High", new_value: phVal });
-    }
-    if (doVal > 0 && (doVal < settings.do_min || doVal > settings.do_max)) {
-      alerts.push({ parameter: "Dissolved Oxygen", old_value: doVal < settings.do_min ? "Low" : "High", new_value: doVal });
-    }
-    if (wlVal < settings.water_level_min || wlVal > settings.water_level_max) {
-      alerts.push({ parameter: "Water Level", old_value: wlVal < settings.water_level_min ? "Low" : "High", new_value: wlVal });
-    }
-    if (ammVal > 0 && (ammVal < settings.ammonia_min || ammVal > settings.ammonia_max)) {
-      alerts.push({ parameter: "Ammonia", old_value: ammVal < settings.ammonia_min ? "Low" : "High", new_value: ammVal });
-    }
+    const CRITICAL_INTERVAL_MS = 0;
+    const WARNING_INTERVAL_MS = 60 * 60 * 1000;
 
-    for (const alert of alerts) {
-      const alertKey = alert.parameter;
-      const lastAlert = lastAlertedState[alertKey];
-      const now = new Date();
-      
-      const shouldLogAlert = !lastAlert.value || 
-        lastAlert.value !== alert.new_value || 
-        (now.getTime() - new Date(lastAlert.timestamp).getTime()) > ALERT_DEDUP_INTERVAL_MS;
-      
-      if (shouldLogAlert) {
-        await pool.query(
-          `INSERT INTO system_logs (action, parameter, old_value, new_value) VALUES ($1, $2, $3, $4)`,
-          ["Alert", alert.parameter, alert.old_value, alert.new_value]
-        );
-        lastAlertedState[alertKey] = { value: alert.new_value, timestamp: now.toISOString() };
-        console.log(`[${now.toISOString()}] Alert logged: ${alert.parameter} ${alert.old_value} (value: ${alert.new_value})`);
-      } else {
-        console.log(`[${now.toISOString()}] Alert suppressed (duplicate within 1hr): ${alert.parameter} ${alert.old_value} (value: ${alert.new_value})`);
+    const sensorChecks = [
+      { key: "Temperature", val: Number(temperature), min: settings.temp_min, max: settings.temp_max },
+      { key: "pH Level", val: Number(ph), min: settings.ph_min, max: settings.ph_max },
+      { key: "Dissolved Oxygen", val: Number(dissolved_oxygen), min: settings.do_min, max: settings.do_max },
+      { key: "Water Level", val: Number(water_level), min: settings.water_level_min, max: settings.water_level_max },
+      { key: "Ammonia", val: Number(ammonia), min: settings.ammonia_min, max: settings.ammonia_max },
+    ];
+
+    for (const sensor of sensorChecks) {
+      if (sensor.val === 0 && sensor.key !== "Water Level") continue;
+
+      const status = getThresholdStatus(sensor.val, sensor.min, sensor.max);
+      const last = lastAlertedState[sensor.key];
+      const lastTs = last.timestamp ? new Date(last.timestamp).getTime() : 0;
+
+      if (status === "good") {
+        lastAlertedState[sensor.key] = { status: "good", value: sensor.val, timestamp: now.toISOString() };
+        continue;
       }
+
+      const interval = status === "critical" ? CRITICAL_INTERVAL_MS : WARNING_INTERVAL_MS;
+
+      if (status === last.status && nowTs - lastTs < interval) {
+        continue;
+      }
+
+      const direction = sensor.val < sensor.min ? "Low" : "High";
+      await pool.query(
+        `INSERT INTO system_logs (action, parameter, old_value, new_value) VALUES ($1, $2, $3, $4)`,
+        ["Alert", sensor.key, direction, sensor.val]
+      );
+      lastAlertedState[sensor.key] = { status, value: sensor.val, timestamp: now.toISOString() };
+      console.log(`[${now.toISOString()}] Alert logged: ${sensor.key} ${direction} (value: ${sensor.val}, status: ${status})`);
     }
 
     res.status(201).json({
