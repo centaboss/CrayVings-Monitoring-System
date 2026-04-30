@@ -12,10 +12,14 @@ The CRAYvings Monitoring System is an IoT-based aquaculture monitoring solution 
 | Build Tool | Vite | 8.0 |
 | Styling | Tailwind CSS | 4.2 |
 | Charts | Recharts | 3.8 |
+| Icons | lucide-react | 1.8 |
+| PDF Export | jsPDF + autoTable | 4.2 + 5.0 |
 | Backend | Express.js | 5.2 |
 | Database | PostgreSQL | 15+ |
 | ORM | pg (connection pool) | 8.20 |
 | Validation | Zod | 4.3 |
+| HTTP Client | Axios | 1.15 |
+| SMS Service | SkySMS API | - |
 
 ### Architecture Diagram
 
@@ -34,11 +38,11 @@ The CRAYvings Monitoring System is an IoT-based aquaculture monitoring solution 
 │       │     └────────────────────┘───────────────────────────┘   │         │
 │       │                                                           │         │
 │  Sensors:                                                         Pages:   │
-│  - DS18B20 (Temperature)                                     - Home     │
-│  - Ultrasonic (Water Level)                                    - Dashboard│
-│  - pH Probe                                                   - Sensors   │
-│  - DO Sensor                                                 - Alerts    │
-│  - Ammonia Sensor                                             - Historical │
+│  - DS18B20 (Temperature)                                     - Home       │
+│  - Ultrasonic (Water Level)                                  - Dashboard  │
+│  - pH Probe                                                  - Sensors    │
+│  - DO Sensor                                                 - Alerts     │
+│  - Ammonia Sensor                                            - Historical │
 │                                                               - Settings  │
 │                                                               - Logs      │
 │                                                               - Activity  │
@@ -113,6 +117,8 @@ value slightly outside threshold:  WARNING (orange)
 - Persistent storage in database
 - Real-time validation with range checking
 - Activity logging for all changes
+- **SMS recipient management** - Add, edit, delete recipients
+- **Test SMS** - Verify SMS configuration
 
 ### 7. Activity Logging
 
@@ -126,6 +132,22 @@ value slightly outside threshold:  WARNING (orange)
 - Synthetic audio tones (Web Audio API)
 - Custom sound upload capability
 - Sound enable/disable toggle
+
+### 9. SMS Alert System
+
+- **SkySMS API integration** for sending SMS notifications
+- **Recipient management** - Add, edit, delete authorized recipients
+- **Bulk SMS sending** - Send alerts to multiple recipients simultaneously
+- **SMS cooldown** - Configurable cooldown period (default: 5000ms)
+- **SMS logging** - Track all sent messages with status
+- **Test SMS** - Send test messages to verify configuration
+- **Active/inactive toggle** - Enable/disable recipients without deletion
+
+### 10. PDF Export
+
+- Export dashboard data to PDF using jsPDF
+- Auto-table formatting for sensor data
+- Historical data export capability
 
 ---
 
@@ -193,6 +215,7 @@ The React dashboard:
 3. **Status**: Indicates connection status (online/offline)
 4. **Alerts**: Warns users when parameters exceed thresholds
 5. **Audio**: Plays alert sounds for threshold violations
+6. **SMS**: Sends SMS notifications for critical alerts via SkySMS
 
 ---
 
@@ -265,6 +288,11 @@ Users can configure thresholds in **Settings**:
 | `/sensor/latest` | GET | Get latest | - | `SensorEntry` |
 | `/settings` | GET | Get thresholds | - | `SensorSettings` |
 | `/settings` | POST | Update thresholds | Partial Settings | `{message, data}` |
+| `/settings/recipients` | GET | Get all recipients | - | `{data: Recipient[]}` |
+| `/settings/recipients` | POST | Add new recipient | `{phone_number, name}` | `{success, data}` |
+| `/settings/recipients/:id` | PUT | Update recipient | `{name, is_active}` | `{success, data}` |
+| `/settings/recipients/:id` | DELETE | Delete recipient | - | `{success, message}` |
+| `/settings/recipients/test/:id` | POST | Send test SMS | - | `{success, message}` |
 | `/system-logs` | GET | Get logs | `?page=&limit=` | `{data, total}` |
 | `/logs` | POST | Create log | `{action, parameter, old_value, new_value}` | `{message, data}` |
 | `/activity-logs` | GET | Get activity | `?page=&limit=&search=&sortBy=` | `{data, total, page, limit, totalPages}` |
@@ -345,7 +373,7 @@ App
 The application uses React Context with custom hooks:
 
 1. **SensorDataContext**: Real-time sensor data, history, connection status
-2. **SensorSettingsContext**: Threshold configuration
+2. **SensorSettingsContext**: Threshold configuration + recipient management
 3. **LogsContext**: System logs with pagination
 4. **ActivityLogsContext**: User activity tracking
 5. **FloatingAlertContext**: Toast notifications
@@ -406,15 +434,79 @@ Baud Rate: 19200
 
 ---
 
+## SMS Alert System
+
+### SkySMS Integration
+
+The system integrates with **SkySMS API** to send SMS notifications when critical conditions are detected.
+
+**Configuration (.env):**
+```bash
+SKYSMS_API_KEY=your_skysms_api_key_here
+SKYSMS_API_URL=https://skysms.skyio.site/api/v1
+SMS_COOLDOWN_MS=5000
+```
+
+### SMS Alert Logic
+
+1. **Threshold breach detected** - Sensor value exceeds critical threshold (15%+ outside range)
+2. **Recipient lookup** - System queries `authorized_recipients` table for active recipients
+3. **Cooldown check** - Prevents SMS spam (default 5 seconds between alerts per parameter)
+4. **Bulk SMS sent** - Uses SkySMS bulk API to send to all active recipients
+5. **Logging** - All SMS attempts logged to `sms_logs` table
+
+### Recipient Management
+
+Manage SMS recipients through the **Settings** page:
+
+| Action | Endpoint | Description |
+|--------|----------|-------------|
+| List | `GET /settings/recipients` | Get all recipients |
+| Add | `POST /settings/recipients` | Add new phone number |
+| Update | `PUT /settings/recipients/:id` | Toggle active status, edit name |
+| Delete | `DELETE /settings/recipients/:id` | Remove recipient |
+| Test | `POST /settings/recipients/test/:id` | Send test SMS |
+
+### SMS Log Table
+
+```sql
+CREATE TABLE sms_logs (
+  id SERIAL PRIMARY KEY,
+  recipient_phone VARCHAR(20) NOT NULL,
+  message TEXT NOT NULL,
+  status VARCHAR(20) NOT NULL,
+  error_message TEXT,
+  sms_id VARCHAR(100),
+  sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+### Authorized Recipients Table
+
+```sql
+CREATE TABLE authorized_recipients (
+  id SERIAL PRIMARY KEY,
+  phone_number VARCHAR(20) NOT NULL UNIQUE,
+  name VARCHAR(100),
+  is_active BOOLEAN DEFAULT true,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+---
+
 ## Project Structure
 
 ```
 src/
 ├── api/
 │   └── client.ts           # Axios API client with AbortController
+├── assets/
+│   └── craybitch without background.png  # Logo
 ├── components/
 │   ├── Header.tsx         # Top navigation bar
-│   ├── Sidebar.tsx        # Side menu navigation (mobile)
+│   ├── Sidebar.tsx        # Side menu navigation (icon-based)
 │   ├── StatCard.tsx       # Metric display card
 │   ├── TrendCard.tsx      # Line chart component
 │   └── FloatingAlert.tsx  # Toast notifications
@@ -430,8 +522,8 @@ src/
 │   ├── DashboardPage.tsx # Main monitoring view
 │   ├── SensorsPage.tsx   # Individual sensor details
 │   ├── AlertsPage.tsx   # Alert history
-│   ├── HistoricalDataPage.tsx # Trend charts
-│   ├── SettingsPage.tsx  # Threshold configuration
+│   ├── HistoricalDataPage.tsx # Trend charts with PDF export
+│   ├── SettingsPage.tsx  # Threshold + recipient management
 │   ├── LogsPage.tsx     # System log viewer
 │   └── ActivityLogsPage.tsx # User activity tracking
 ├── types/
@@ -441,7 +533,9 @@ src/
 ├── App.tsx             # Main app layout
 ├── main.tsx           # Entry point
 └── index.css           # Tailwind styles
-server.cjs             # Express backend server
+server.cjs             # Express backend server (832 lines)
+esp32code/
+└── esp32code.ino      # ESP32 firmware code
 ```
 
 ---
@@ -487,6 +581,7 @@ Upload using Arduino IDE and monitor at 19200 baud.
 ```bash
 # Server Configuration
 PORT=3000
+NODE_ENV=development
 
 # PostgreSQL Configuration
 PG_HOST=localhost
@@ -496,7 +591,19 @@ PG_USER=postgres
 PG_PASSWORD=your_password
 
 # CORS Configuration
-ALLOWED_ORIGINS=http://localhost:5173,http://localhost:5174
+ALLOWED_ORIGINS=http://localhost:5173,http://localhost:5174,http://localhost:3001
+
+# Arduino Serial Configuration (optional)
+ARDUINO_ENABLED=false
+ARDUINO_PORT=COM3
+ARDUINO_BAUD=19200
+DEVICE_ID=ARDUINO_001
+POLL_INTERVAL=1000
+
+# SkySMS Configuration
+SKYSMS_API_KEY=your_skysms_api_key_here
+SKYSMS_API_URL=https://skysms.skyio.site/api/v1
+SMS_COOLDOWN_MS=5000
 ```
 
 ### Frontend
@@ -575,6 +682,33 @@ CREATE INDEX idx_activity_logs_timestamp ON activity_logs(timestamp DESC);
 CREATE INDEX idx_activity_logs_action_type ON activity_logs(action_type);
 ```
 
+### Authorized Recipients Table
+
+```sql
+CREATE TABLE authorized_recipients (
+  id SERIAL PRIMARY KEY,
+  phone_number VARCHAR(20) NOT NULL UNIQUE,
+  name VARCHAR(100),
+  is_active BOOLEAN DEFAULT true,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+### SMS Logs Table
+
+```sql
+CREATE TABLE sms_logs (
+  id SERIAL PRIMARY KEY,
+  recipient_phone VARCHAR(20) NOT NULL,
+  message TEXT NOT NULL,
+  status VARCHAR(20) NOT NULL,
+  error_message TEXT,
+  sms_id VARCHAR(100),
+  sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
 ---
 
 ## Debugging Guide
@@ -630,6 +764,7 @@ curl -X POST http://localhost:3000/sensor \
 - **Connection pool**: 20 max connections
 - **Page size**: 20 items default
 - **Alert cooldown**: 10 seconds
+- **SMS cooldown**: 5 seconds (configurable via `SMS_COOLDOWN_MS`)
 - **Offline threshold**: 15 seconds
 
 ### Scalability Considerations
@@ -665,8 +800,8 @@ curl -X POST http://localhost:3000/sensor \
 1. **Mobile App** - Native iOS/Android apps
 2. **Push Notifications** - Firebase or similar
 3. **Multi-Pond Support** - Multiple tank monitoring
-4. **Export Features** - CSV/PDF export
-5. **Data Analysis** - ML-based predictions
-6. **WebSocket** - Real-time updates instead of polling
-7. **Multi-user** - Role-based access
-8. **Export API** - Public API for integrations
+4. **Data Analysis** - ML-based predictions
+5. **WebSocket** - Real-time updates instead of polling
+6. **Multi-user** - Role-based access
+7. **Export API** - Public API for integrations
+8. **Arduino Serial** - Direct serial connection support

@@ -30,10 +30,13 @@ This can help reduce risks caused by poor water conditions and improve overall m
 ### Core Features
 - **Real-time sensor monitoring** - Temperature, pH, dissolved oxygen, water level, ammonia
 - **ESP32-based data collection** - Wireless sensor data transmission
-- **Web dashboard** - Responsive React UI for viewing live readings
+- **Web dashboard** - Responsive React UI with icon-based navigation
 - **Database storage** - PostgreSQL for historical data
 - **Smart alerts** - Threshold-based notifications with cooldown
+- **SMS notifications** - Critical alerts via SkySMS API
+- **Recipient management** - Manage SMS alert recipients
 - **Custom alert sounds** - Audio alerts via Web Audio API
+- **PDF export** - Export dashboard data to PDF
 - **Activity logging** - Track user interactions
 
 ### Monitoring Parameters
@@ -50,10 +53,10 @@ This can help reduce risks caused by poor water conditions and improve overall m
 - **Dashboard** - Live readings and charts
 - **Sensors** - Individual sensor details
 - **Alerts** - Alert history
-- **Historical Data** - Trend charts over time
-- **Settings** - Configure thresholds
-- **Logs** - System event logs
+- **Historical Data** - Trend charts over time (with PDF export)
 - **Activity Logs** - User activity tracking
+- **Logs** - System event logs
+- **Settings** - Configure thresholds and manage SMS recipients
 
 ---
 
@@ -74,11 +77,14 @@ This can help reduce risks caused by poor water conditions and improve overall m
 | Build Tool | Vite | 8.0 |
 | Styling | Tailwind CSS | 4.2 |
 | Charts | Recharts | 3.8 |
+| Icons | lucide-react | 1.8 |
+| PDF Export | jsPDF + autoTable | 4.2 + 5.0 |
 | HTTP Client | Axios | 1.15 |
 | Backend | Express.js | 5.2 |
 | Database | PostgreSQL | 15+ |
 | Connection Pool | pg | 8.20 |
 | Validation | Zod | 4.3 |
+| SMS Service | SkySMS API | - |
 
 ---
 
@@ -192,6 +198,13 @@ Navigate to **Settings** in the dashboard to configure:
 - Upload custom alert sounds
 - Adjust alert cooldown (10 seconds default)
 
+### SMS Notifications
+
+- **SkySMS integration** for critical alerts
+- **Recipient management** in Settings page
+- **SMS cooldown** to prevent spam (5 seconds default)
+- **Test SMS** feature to verify configuration
+
 ---
 
 ## API Endpoints
@@ -204,6 +217,11 @@ Navigate to **Settings** in the dashboard to configure:
 | `/sensor` | GET | Get history |
 | `/settings` | GET | Get thresholds |
 | `/settings` | POST | Update thresholds |
+| `/settings/recipients` | GET | Get SMS recipients |
+| `/settings/recipients` | POST | Add new recipient |
+| `/settings/recipients/:id` | PUT | Update recipient |
+| `/settings/recipients/:id` | DELETE | Delete recipient |
+| `/settings/recipients/test/:id` | POST | Send test SMS |
 | `/system-logs` | GET | Get system logs |
 | `/activity-logs` | GET | Get activity logs |
 
@@ -213,9 +231,12 @@ Navigate to **Settings** in the dashboard to configure:
 
 ```
 src/
-├── api/client.ts          # API client
+├── api/client.ts          # API client (Axios)
+├── assets/              # Static assets
+│   └── craybitch without background.png
 ├── components/           # UI components
 │   ├── Header.tsx
+│   ├── Sidebar.tsx
 │   ├── StatCard.tsx
 │   ├── TrendCard.tsx
 │   └── FloatingAlert.tsx
@@ -241,7 +262,9 @@ src/
 ├── App.tsx
 ├── main.tsx
 └── index.css
-server.cjs              # Express backend
+server.cjs              # Express backend (832 lines)
+esp32code/
+└── esp32code.ino       # ESP32 firmware
 ```
 
 ---
@@ -256,6 +279,7 @@ server.cjs              # Express backend
 | No data showing | Verify ESP32 IP address |
 | CORS error | Add frontend port to ALLOWED_ORIGINS |
 | "Device offline" | Check ESP32 WiFi connection |
+| SMS not sending | Verify SKYSMS_API_KEY in .env |
 
 ### Debug Commands
 
