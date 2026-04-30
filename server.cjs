@@ -23,6 +23,99 @@ function getThresholdStatus(value, min, max) {
   return "good";
 }
 
+// SkySMS API helpers
+const SKYSMS_API_KEY = process.env.SKYSMS_API_KEY;
+const SKYSMS_API_URL = process.env.SKYSMS_API_URL || "https://skysms.skyio.site/api/v1";
+
+async function sendSingleSMS(phoneNumber, message) {
+  const maxRetries = 1;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      if (!SKYSMS_API_KEY || !SKYSMS_API_URL) {
+        console.error("SkySMS configuration missing in .env");
+        await logSMS(phoneNumber, message, "failed", "Missing SkySMS config", null);
+        return;
+      }
+      const response = await axios.post(
+        `${SKYSMS_API_URL}/sms/send`,
+        { phone_number: phoneNumber, message, from: "CRAYVINGS WATER MONITORING SYSTEM" },
+        {
+          headers: {
+            "X-API-Key": SKYSMS_API_KEY,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+      console.log(`✅ SMS sent to ${phoneNumber}`);
+      await logSMS(phoneNumber, message, "sent", null, response.data?.id);
+      return response.data;
+    } catch (error) {
+      console.error(`❌ Failed to send SMS to ${phoneNumber} (attempt ${attempt + 1}/${maxRetries + 1}):`, error.message);
+      if (attempt === maxRetries) {
+        await logSMS(phoneNumber, message, "failed", error.message, null);
+        return;
+      }
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+  }
+}
+
+async function sendBulkSMS(phoneNumbers, message) {
+  const maxRetries = 1;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      if (!SKYSMS_API_KEY || !SKYSMS_API_URL) {
+        console.error("SkySMS configuration missing in .env");
+        for (const phone of phoneNumbers) {
+          await logSMS(phone, message, "failed", "Missing SkySMS config", null);
+        }
+        return;
+      }
+      if (phoneNumbers.length === 0) return;
+      const response = await axios.post(
+        `${SKYSMS_API_URL}/sms/send-bulk`,
+        {
+          recipients: phoneNumbers.map((phone) => ({ phone_number: phone })),
+          message,
+          from: "CRAYVINGS WATER MONITORING SYSTEM"
+        },
+        {
+          headers: {
+            "X-API-Key": SKYSMS_API_KEY,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+      console.log(`✅ Bulk SMS sent to ${phoneNumbers.length} recipients`);
+      for (const phone of phoneNumbers) {
+        await logSMS(phone, message, "sent", null, response.data?.id);
+      }
+      return response.data;
+    } catch (error) {
+      console.error(`❌ Failed to send bulk SMS (attempt ${attempt + 1}/${maxRetries + 1}):`, error.message);
+      if (attempt === maxRetries) {
+        for (const phone of phoneNumbers) {
+          await logSMS(phone, message, "failed", error.message, null);
+        }
+        return;
+      }
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+  }
+}
+
+async function logSMS(phone, message, status, error, smsId = null) {
+  try {
+    await pool.query(
+      `INSERT INTO sms_logs (recipient_phone, message, status, error_message, sms_id, sent_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())`,
+      [phone, message, status, error || null, smsId || null]
+    );
+  } catch (logErr) {
+    console.error("Failed to log SMS:", logErr.message);
+  }
+}
+
 const lastAlertedState = {
   Temperature: { status: null, value: null, timestamp: null },
   "pH Level": { status: null, value: null, timestamp: null },
@@ -155,7 +248,7 @@ app.post("/sensor", async (req, res) => {
     const now = new Date();
     const nowTs = now.getTime();
 
-    const CRITICAL_INTERVAL_MS = 0;
+    const CRITICAL_INTERVAL_MS = process.env.SMS_COOLDOWN_MS ? parseInt(process.env.SMS_COOLDOWN_MS) : 5 * 60 * 1000;
     const WARNING_INTERVAL_MS = 60 * 60 * 1000;
 
     const sensorChecks = [
@@ -191,6 +284,41 @@ app.post("/sensor", async (req, res) => {
       );
       lastAlertedState[sensor.key] = { status, value: sensor.val, timestamp: now.toISOString() };
       console.log(`[${now.toISOString()}] Alert logged: ${sensor.key} ${direction} (value: ${sensor.val}, status: ${status})`);
+
+      // Only send SMS for critical alerts
+      if (status === "critical") {
+        try {
+          const recipientsResult = await pool.query(
+            "SELECT phone_number FROM authorized_recipients WHERE is_active = true"
+          );
+          if (recipientsResult.rows.length === 0) {
+            console.warn(`[${now.toISOString()}] No active recipients for SMS alert`);
+            continue;
+          }
+          const unitMap = {
+            "Temperature": "°C",
+            "pH Level": "",
+            "Dissolved Oxygen": "mg/L",
+            "Water Level": "%",
+            "Ammonia": "ppm",
+          };
+          const emojiMap = {
+            "Temperature": "🌡️",
+            "pH Level": "🧪",
+            "Dissolved Oxygen": "💨",
+            "Water Level": "💧",
+            "Ammonia": "☠️",
+          };
+          const unit = unitMap[sensor.key] || "";
+          const emoji = emojiMap[sensor.key] || "⚠️";
+          const message = `${emoji} ${sensor.key.toUpperCase()} ALERT: ${sensor.val}${unit} (${direction === "Low" ? "min" : "max"}: ${direction === "Low" ? sensor.min : sensor.max}${unit})`;
+          
+          const phoneNumbers = recipientsResult.rows.map(row => row.phone_number);
+          await sendBulkSMS(phoneNumbers, message);
+        } catch (smsErr) {
+          console.error(`[${now.toISOString()}] SMS alert failed:`, smsErr.message);
+        }
+      }
     }
 
     res.status(201).json({
@@ -448,6 +576,108 @@ app.get("/activity-logs", async (req, res) => {
   }
 });
 
+// Recipient management endpoints
+app.get("/settings/recipients", async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT id, phone_number, name, is_active, created_at FROM authorized_recipients ORDER BY created_at DESC"
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error(`[${new Date().toISOString()}] Error fetching recipients:`, err);
+    res.status(500).json({ error: "Failed to fetch recipients" });
+  }
+});
+
+app.post("/settings/recipients", async (req, res) => {
+  try {
+    const { phone_number, name } = req.body;
+
+    if (!/^\+639\d{8}$/.test(phone_number)) {
+      return res.status(400).json({ error: "Invalid Philippine phone number. Format: +639XXXXXXXX" });
+    }
+
+    const result = await pool.query(
+      "INSERT INTO authorized_recipients (phone_number, name) VALUES ($1, $2) RETURNING *",
+      [phone_number, name || "Recipient"]
+    );
+
+    res.status(201).json({ success: true, message: "Recipient added", data: result.rows[0] });
+  } catch (err) {
+    if (err.code === "23505") {
+      return res.status(409).json({ error: "Phone number already exists" });
+    }
+    console.error(`[${new Date().toISOString()}] Error adding recipient:`, err);
+    res.status(500).json({ error: "Failed to add recipient" });
+  }
+});
+
+app.put("/settings/recipients/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, is_active } = req.body;
+
+    const result = await pool.query(
+      "UPDATE authorized_recipients SET name = COALESCE($1, name), is_active = COALESCE($2, is_active), updated_at = NOW() WHERE id = $3 RETURNING *",
+      [name, is_active, id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Recipient not found" });
+    }
+
+    res.json({ success: true, message: "Recipient updated", data: result.rows[0] });
+  } catch (err) {
+    console.error(`[${new Date().toISOString()}] Error updating recipient:`, err);
+    res.status(500).json({ error: "Failed to update recipient" });
+  }
+});
+
+app.delete("/settings/recipients/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await pool.query(
+      "DELETE FROM authorized_recipients WHERE id = $1 RETURNING id",
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Recipient not found" });
+    }
+
+    res.json({ success: true, message: "Recipient deleted" });
+  } catch (err) {
+    console.error(`[${new Date().toISOString()}] Error deleting recipient:`, err);
+    res.status(500).json({ error: "Failed to delete recipient" });
+  }
+});
+
+app.post("/settings/recipients/test/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await pool.query(
+      "SELECT phone_number, name FROM authorized_recipients WHERE id = $1",
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Recipient not found" });
+    }
+
+    const { phone_number, name } = result.rows[0];
+    const testMessage = `Test SMS from CrayVings Monitoring System. If you received this, ${name} is configured correctly!`;
+
+    await sendSingleSMS(phone_number, testMessage);
+
+    res.json({ success: true, message: "Test SMS sent", recipient: name });
+  } catch (err) {
+    console.error(`[${new Date().toISOString()}] Error sending test SMS:`, err);
+    res.status(500).json({ error: "Failed to send test SMS" });
+  }
+});
+
 async function startServer() {
   try {
     const client = await pool.connect();
@@ -511,7 +741,39 @@ async function startServer() {
           timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
       `);
-      
+
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS authorized_recipients (
+          id SERIAL PRIMARY KEY,
+          phone_number VARCHAR(20) NOT NULL UNIQUE,
+          name VARCHAR(100),
+          is_active BOOLEAN DEFAULT true,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+
+      await client.query(`
+        INSERT INTO authorized_recipients (phone_number, name)
+        VALUES ('+639770928085', 'Test Recipient')
+        ON CONFLICT (phone_number) DO NOTHING
+      `);
+      console.log(`[${new Date().toISOString()}] Test recipient +639770928085 added`);
+
+      // New: sms_logs table
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS sms_logs (
+          id SERIAL PRIMARY KEY,
+          recipient_phone VARCHAR(20) NOT NULL,
+          message TEXT NOT NULL,
+          status VARCHAR(20) NOT NULL,
+          error_message TEXT,
+          sms_id VARCHAR(100),
+          sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      console.log(`[${new Date().toISOString()}] sms_logs table ready`);
+
       await client.query(`
         CREATE INDEX IF NOT EXISTS idx_activity_logs_timestamp ON activity_logs(timestamp DESC)
       `);
@@ -538,6 +800,13 @@ async function startServer() {
       const result = await client.query("SELECT COUNT(*) FROM sensors");
       console.log(`[${new Date().toISOString()}] Sensor records count: ${result.rows[0].count}`);
       console.log(`[${new Date().toISOString()}] PostgreSQL connected and table ready`);
+
+      // SkySMS credential check
+      if (!process.env.SKYSMS_API_KEY) {
+        console.warn(`[${new Date().toISOString()}] WARNING: SKYSMS_API_KEY not set. SMS alerts will fail.`);
+      } else {
+        console.log(`[${new Date().toISOString()}] SkySMS configured (API key present)`);
+      }
     } finally {
       client.release();
     }
