@@ -29,30 +29,108 @@ export default function LogsPage() {
   const endItem = useMemo(() => Math.min(logsPage * 20, logsTotal), [logsPage, logsTotal]);
 
   const handleExport = useCallback(() => {
+    if (filteredLogs.length === 0) {
+      alert("No logs to export.");
+      return;
+    }
+
     const doc = new jsPDF();
     const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
 
     doc.setFontSize(20);
+    doc.setFont("helvetica", "bold");
     doc.text("CRAYvings System Logs", pageWidth / 2, 20, { align: "center" });
 
     doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
     doc.text(`Generated on ${new Date().toLocaleString()}`, pageWidth / 2, 28, { align: "center" });
+
+    const parameterCounts = filteredLogs.reduce<Record<string, number>>((acc, log) => {
+      acc[log.parameter] = (acc[log.parameter] || 0) + 1;
+      return acc;
+    }, {});
+
+    const summaryY = 34;
+    doc.setFontSize(11);
+    doc.setFont("helvetica", "bold");
+    doc.text("Summary", 14, summaryY);
+    
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "normal");
+    let summaryLineY = summaryY + 6;
+    doc.text(`Total Entries: ${filteredLogs.length}`, 14, summaryLineY);
+    summaryLineY += 5;
+    
+    Object.entries(parameterCounts).forEach(([param, count]) => {
+      doc.text(`${param}: ${count}`, 14, summaryLineY);
+      summaryLineY += 5;
+    });
+
+    const tableStartY = summaryLineY + 8;
 
     const tableData = filteredLogs.map((log) => [
       log.timestamp ? new Date(log.timestamp).toLocaleString() : "-",
       log.parameter,
-      log.old_value,
-      log.new_value,
+      String(log.old_value),
+      String(log.new_value),
       log.action,
     ]);
 
     (doc as any).autoTable({
-      startY: 35,
+      startY: tableStartY,
       head: [["Timestamp", "Parameter", "Old Value", "New Value", "Action"]],
       body: tableData,
-      styles: { fontSize: 9, cellPadding: 3 },
-      headStyles: { fillColor: [241, 245, 249], textColor: [30, 41, 59], fontStyle: "bold" },
-      alternateRowStyles: { fillColor: [248, 250, 252] },
+      styles: { 
+        fontSize: 8, 
+        cellPadding: 2.5,
+        valign: "middle",
+      },
+      headStyles: { 
+        fillColor: [241, 245, 249], 
+        textColor: [30, 41, 59], 
+        fontStyle: "bold",
+        halign: "center",
+      },
+      alternateRowStyles: { 
+        fillColor: [248, 250, 252] 
+      },
+      columnStyles: {
+        0: { cellWidth: 45 },
+        1: { cellWidth: 35 },
+        2: { cellWidth: 30, halign: "center" },
+        3: { cellWidth: 30, halign: "center" },
+        4: { cellWidth: 35, halign: "center" },
+      },
+      margin: { left: 14, right: 14 },
+      didDrawPage: (data: { doc: jsPDF }) => {
+        const currentPage = (data.doc as any).internal.getNumberOfPages();
+        const totalPages = (data.doc as any).internal.pages.length;
+
+        data.doc.setFontSize(8);
+        data.doc.setFont("helvetica", "normal");
+        data.doc.setTextColor(128, 128, 128);
+        
+        data.doc.text(
+          `Page ${currentPage} of ${totalPages}`,
+          pageWidth / 2,
+          pageHeight - 10,
+          { align: "center" }
+        );
+        
+        data.doc.text(
+          "CRAYvings Monitoring System",
+          14,
+          pageHeight - 10
+        );
+        
+        data.doc.text(
+          `Exported: ${new Date().toLocaleDateString()}`,
+          pageWidth - 14,
+          pageHeight - 10,
+          { align: "right" }
+        );
+      },
     });
 
     doc.save(`CRAYvings_System_Logs_${new Date().toISOString().split("T")[0]}.pdf`);
