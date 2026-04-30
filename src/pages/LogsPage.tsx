@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback } from "react";
 import { FileText, Download, Clock, Thermometer, Droplets, Waves, FlaskConical, AlertCircle } from "lucide-react";
 import { useSensors } from "../hooks/useSensors";
-import jsPDF from "jspdf";
+import { jsPDF } from "jspdf";
 import "jspdf-autotable";
 
 const PARAMETER_ICONS: Record<string, React.ReactNode> = {
