@@ -1,6 +1,8 @@
 import { useState, useMemo, useCallback } from "react";
 import { FileText, Download, Clock, Thermometer, Droplets, Waves, FlaskConical, AlertCircle } from "lucide-react";
 import { useSensors } from "../hooks/useSensors";
+import jsPDF from "jspdf";
+import "jspdf-autotable";
 
 const PARAMETER_ICONS: Record<string, React.ReactNode> = {
   Temperature: <Thermometer size={14} className="text-blue-500" />,
@@ -27,63 +29,33 @@ export default function LogsPage() {
   const endItem = useMemo(() => Math.min(logsPage * 20, logsTotal), [logsPage, logsTotal]);
 
   const handleExport = useCallback(() => {
-    const printWindow = window.open("", "_blank");
-    if (!printWindow) return;
+    const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
 
-    const html = `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>CRAYvings System Logs - ${new Date().toLocaleDateString()}</title>
-          <style>
-            body { font-family: Arial, sans-serif; padding: 20px; }
-            h1 { color: #1e293b; margin-bottom: 5px; }
-            .date { color: #64748b; margin-bottom: 20px; }
-            table { width: 100%; border-collapse: collapse; }
-            th, td { border: 1px solid #e2e8f0; padding: 10px; text-align: left; }
-            th { background: #f1f5f9; }
-            @media print { body { margin: 0; } }
-          </style>
-        </head>
-        <body>
-          <h1>CRAYvings System Logs</h1>
-          <p class="date">Generated on ${new Date().toLocaleString()}</p>
-          <table>
-            <thead>
-              <tr>
-                <th>Timestamp</th>
-                <th>Parameter</th>
-                <th>Old Value</th>
-                <th>New Value</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${filteredLogs
-                .map(
-                  (log) => `
-                <tr>
-                  <td>${log.timestamp ? new Date(log.timestamp).toLocaleString() : "-"}</td>
-                  <td>${log.parameter}</td>
-                  <td>${log.old_value}</td>
-                  <td>${log.new_value}</td>
-                  <td>${log.action}</td>
-                </tr>
-              `
-                )
-                .join("")}
-            </tbody>
-          </table>
-        </body>
-      </html>
-    `;
+    doc.setFontSize(20);
+    doc.text("CRAYvings System Logs", pageWidth / 2, 20, { align: "center" });
 
-    printWindow.document.write(html);
-    printWindow.document.close();
-    printWindow.focus();
-    setTimeout(() => {
-      printWindow.print();
-    }, 250);
+    doc.setFontSize(10);
+    doc.text(`Generated on ${new Date().toLocaleString()}`, pageWidth / 2, 28, { align: "center" });
+
+    const tableData = filteredLogs.map((log) => [
+      log.timestamp ? new Date(log.timestamp).toLocaleString() : "-",
+      log.parameter,
+      log.old_value,
+      log.new_value,
+      log.action,
+    ]);
+
+    (doc as any).autoTable({
+      startY: 35,
+      head: [["Timestamp", "Parameter", "Old Value", "New Value", "Action"]],
+      body: tableData,
+      styles: { fontSize: 9, cellPadding: 3 },
+      headStyles: { fillColor: [241, 245, 249], textColor: [30, 41, 59], fontStyle: "bold" },
+      alternateRowStyles: { fillColor: [248, 250, 252] },
+    });
+
+    doc.save(`CRAYvings_System_Logs_${new Date().toISOString().split("T")[0]}.pdf`);
   }, [filteredLogs]);
 
   if (logsLoading) {

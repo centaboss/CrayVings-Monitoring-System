@@ -40,8 +40,7 @@ export function useThresholdAlert() {
       if (!config) continue;
 
       const newStatus = getThresholdStatus(value, config.range, config.isMinOnly);
-      const previousStatus = previousStatusRef.current[key];
-      
+       
       // Update previous status
       previousStatusRef.current[key] = newStatus;
       
