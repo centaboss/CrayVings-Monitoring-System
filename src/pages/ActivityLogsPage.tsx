@@ -219,8 +219,8 @@ export default function ActivityLogsPage() {
                 Page {activityLogsPage} of {activityLogsTotalPages || 1}
               </span>
               <button
-                onClick={() => setActivityLogsPage(Math.min(activityLogsTotalPages, activityLogsPage + 1))}
-                disabled={activityLogsPage >= activityLogsTotalPages}
+                 onClick={() => setActivityLogsPage(Math.min(activityLogsTotalPages || 1, activityLogsPage + 1))}
+                 disabled={activityLogsPage >= (activityLogsTotalPages || 1)}
                 className="flex items-center gap-1 px-3 py-1 text-sm border border-gray-200 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
               >
                 Next
