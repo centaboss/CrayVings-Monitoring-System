@@ -371,7 +371,7 @@ function useActivityLogsManager() {
     searchRef.current = state.activitySearch;
     sortRef.current = state.activitySortBy;
     filterRef.current = state.activityActionFilter;
-  });
+  }, [state.activitySearch, state.activitySortBy, state.activityActionFilter]);
 
   const fetchData = useCallback(async (page = 1, search?: string, sortBy?: "newest" | "oldest", actionFilter?: string) => {
     if (abortControllerRef.current) {
@@ -401,7 +401,7 @@ function useActivityLogsManager() {
           activityLogsError: null,
           activityLogsPage: response.page,
           activityLogsTotal: response.total,
-          activityLogsTotalPages: response.totalPages,
+          activityLogsTotalPages: response.totalPages ?? Math.ceil((response.total || 0) / 20),
         }));
       }
     } catch {

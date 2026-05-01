@@ -1,10 +1,10 @@
 import { useState, useMemo } from "react";
-import { AlertTriangle, AlertCircle } from "lucide-react";
+import { AlertTriangle, AlertCircle, ChevronLeft, ChevronRight } from "lucide-react";
 import { useSensors } from "../hooks/useSensors";
 import { parseAlertSeverity, type AlertSeverity } from "../types";
 
 export default function AlertsPage() {
-  const { logs, logsLoading, logsError } = useSensors();
+  const { logs, logsLoading, logsError, logsPage, logsTotal, setLogsPage } = useSensors();
   const [filter, setFilter] = useState<"all" | "Alert" | "Change">("all");
 
   const processedLogs = useMemo(() => {
@@ -33,12 +33,19 @@ export default function AlertsPage() {
 
   const alertCounts = useMemo(
     () => ({
-      all: logs.length,
+      all: logsTotal ?? logs.length,
       Alert: logs.filter((l) => l.action === "Alert").length,
       Change: logs.filter((l) => l.action === "Change").length,
     }),
-    [logs]
+    [logs, logsTotal]
   );
+
+  const logsTotalPages = useMemo(() => {
+    return logsTotal ? Math.ceil(logsTotal / 20) : 1;
+  }, [logsTotal]);
+
+  const startItem = (logsPage - 1) * 20 + 1;
+  const endItem = Math.min(logsPage * 20, logsTotal ?? logs.length);
 
   if (logsLoading) {
     return (
@@ -73,7 +80,7 @@ export default function AlertsPage() {
             </p>
           </div>
           <div className="text-sm text-gray-500">
-            {logs.length} total entries
+             {logsTotal ?? logs.length} total entries
           </div>
         </div>
       </div>
@@ -106,51 +113,82 @@ export default function AlertsPage() {
           </p>
         </div>
       ) : (
-        <div className="space-y-2">
-          {filteredLogs.map((log, index) => (
-            <div
-              key={log.id ?? index}
-              className={`rounded-lg border p-3 ${getSeverityColor(log.severity)}`}
-            >
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`px-2 py-0.5 rounded text-xs font-bold ${
-                      log.action === "Alert"
-                        ? "bg-red-500 text-white"
-                        : log.action === "Change"
-                          ? "bg-blue-500 text-white"
-                          : "bg-gray-500 text-white"
-                    }`}
-                  >
-                    {log.action}
-                  </span>
-                  <span className="font-semibold text-sm">{log.parameter}</span>
+        <>
+          <div className="space-y-2">
+            {filteredLogs.map((log, index) => (
+              <div
+                key={log.id ?? index}
+                className={`rounded-lg border p-3 ${getSeverityColor(log.severity)}`}
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`px-2 py-0.5 rounded text-xs font-bold ${
+                        log.action === "Alert"
+                          ? "bg-red-500 text-white"
+                          : log.action === "Change"
+                            ? "bg-blue-500 text-white"
+                            : "bg-gray-500 text-white"
+                      }`}
+                    >
+                      {log.action}
+                    </span>
+                    <span className="font-semibold text-sm">{log.parameter}</span>
+                  </div>
+                  <div className="flex items-center gap-1 text-xs text-gray-500">
+                    {log.timestamp
+                      ? new Date(log.timestamp).toLocaleString()
+                      : "N/A"}
+                  </div>
                 </div>
-                <div className="flex items-center gap-1 text-xs text-gray-500">
-                  {log.timestamp
-                    ? new Date(log.timestamp).toLocaleString()
-                    : "N/A"}
+
+                <div className="mt-2 text-sm">
+                  {log.action === "Alert" ? (
+                    <span>
+                      <span className="font-medium">{log.parameter}</span> is{" "}
+                      <span className="font-bold">{String(log.old_value)}</span>
+                      {" "}(recorded: <span className="font-bold">{log.new_value}</span>)
+                    </span>
+                  ) : (
+                    <span>
+                      Changed from <span className="font-bold">{log.old_value}</span> to{" "}
+                      <span className="font-bold">{log.new_value}</span>
+                    </span>
+                  )}
                 </div>
               </div>
+            ))}
+          </div>
 
-              <div className="mt-2 text-sm">
-                {log.action === "Alert" ? (
-                  <span>
-                    <span className="font-medium">{log.parameter}</span> is{" "}
-                    <span className="font-bold">{String(log.old_value)}</span>
-                    {" "}(recorded: <span className="font-bold">{log.new_value}</span>)
-                  </span>
-                ) : (
-                  <span>
-                    Changed from <span className="font-bold">{log.old_value}</span> to{" "}
-                    <span className="font-bold">{log.new_value}</span>
-                  </span>
-                )}
+          {logsTotal > 20 && (
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-gray-400">
+                Showing {startItem}-{endItem} of {logsTotal} logs
+              </p>
+              <div className="flex gap-1">
+                <button
+                  onClick={() => setLogsPage(Math.max(1, logsPage - 1))}
+                  disabled={logsPage <= 1}
+                  className="flex items-center gap-1 px-3 py-1 text-sm border border-gray-200 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
+                >
+                  <ChevronLeft size={14} />
+                  Previous
+                </button>
+                <span className="px-3 py-1 text-sm text-gray-600">
+                  Page {logsPage} of {logsTotalPages}
+                </span>
+                <button
+                  onClick={() => setLogsPage(Math.min(logsTotalPages, logsPage + 1))}
+                  disabled={logsPage >= logsTotalPages}
+                  className="flex items-center gap-1 px-3 py-1 text-sm border border-gray-200 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
+                >
+                  Next
+                  <ChevronRight size={14} />
+                </button>
               </div>
             </div>
-          ))}
-        </div>
+          )}
+        </>
       )}
     </div>
   );
