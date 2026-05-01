@@ -41,7 +41,7 @@ export default function HomePage({ onNavigate }: Props) {
     if (!hasData) return { safe: false, alerts: ["No sensor data"] };
     
     const alerts: string[] = [];
-    const sensorKeys = ["temperature", "ph", "dissolved_oxygen", "ammonia", "water_level"] as const;
+    const sensorKeys = ["temperature", "ph", "water_level"] as const;
     
     for (const key of sensorKeys) {
       const threshold = thresholds[key];
@@ -101,15 +101,8 @@ export default function HomePage({ onNavigate }: Props) {
       icon: <FlaskConical size={24} />,
     },
     {
-      title: "Dissolved Oxygen",
-      value: data ? `${data.dissolved_oxygen} mg/L` : "-- mg/L",
-      description: `Min threshold: ${thresholds.dissolved_oxygen.range.min} mg/L`,
-      gradient: "from-sky-400 to-cyan-500",
-      icon: <Droplets size={24} />,
-    },
-    {
       title: "Water Level",
-      value: data ? `${data.water_level} cm` : "-- cm",
+      value: data ? `${data.water_level}%` : "--%",
       description: `Threshold: ${thresholds.water_level.range.min}-${thresholds.water_level.range.max}%`,
       gradient: "from-indigo-500 to-blue-500",
       icon: <Waves size={24} />,
@@ -118,8 +111,8 @@ export default function HomePage({ onNavigate }: Props) {
 
   const highlights = [
     { label: "Temperature", value: data ? `${data.temperature}°C` : "--", color: "bg-blue-50 border-blue-200 text-blue-700" },
-    { label: "Water Quality", value: data ? `${data.ph} pH` : "--", color: "bg-emerald-50 border-emerald-200 text-emerald-700" },
-    { label: "Water Level", value: data ? `${data.water_level} cm` : "--", color: "bg-indigo-50 border-indigo-200 text-indigo-700" },
+    { label: "pH Level", value: data ? `${data.ph}` : "--", color: "bg-emerald-50 border-emerald-200 text-emerald-700" },
+    { label: "Water Level", value: data ? `${data.water_level}%` : "--", color: "bg-indigo-50 border-indigo-200 text-indigo-700" },
   ];
 
   const recentAlerts = tankStatus.alerts.slice(0, 4);
@@ -253,18 +246,11 @@ export default function HomePage({ onNavigate }: Props) {
                 Optimal: {thresholds.ph.range.min}-{thresholds.ph.range.max}
               </p>
             </div>
-            <div className="rounded-xl bg-sky-50 p-4">
-              <p className="text-xs text-gray-500">Dissolved Oxygen</p>
-              <p className="mt-1 text-2xl font-bold text-sky-600">{data?.dissolved_oxygen ?? "--"} mg/L</p>
+            <div className="rounded-xl bg-indigo-50 p-4">
+              <p className="text-xs text-gray-500">Water Level</p>
+              <p className="mt-1 text-2xl font-bold text-indigo-600">{data?.water_level ?? "--"}%</p>
               <p className="mt-1 text-xs text-gray-400">
-                Optimal: {thresholds.dissolved_oxygen.range.min} mg/L+
-              </p>
-            </div>
-            <div className="rounded-xl bg-orange-50 p-4">
-              <p className="text-xs text-gray-500">Ammonia</p>
-              <p className="mt-1 text-2xl font-bold text-orange-600">{data?.ammonia ?? "--"} ppm</p>
-              <p className="mt-1 text-xs text-gray-400">
-                Safe: {'<'}{thresholds.ammonia.range.max} ppm
+                Optimal: {thresholds.water_level.range.min}-{thresholds.water_level.range.max}%
               </p>
             </div>
           </div>

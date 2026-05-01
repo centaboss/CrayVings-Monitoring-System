@@ -119,9 +119,7 @@ async function logSMS(phone, message, status, error, smsId = null) {
 const lastAlertedState = {
   Temperature: { status: null, value: null, timestamp: null },
   "pH Level": { status: null, value: null, timestamp: null },
-  "Dissolved Oxygen": { status: null, value: null, timestamp: null },
   "Water Level": { status: null, value: null, timestamp: null },
-  Ammonia: { status: null, value: null, timestamp: null },
 };
 
 app.use(express.json());
@@ -170,8 +168,6 @@ const sensorSchema = z.object({
   temperature: z.coerce.number().min(-10).max(50),
   water_level: z.coerce.number().min(0).max(100),
   ph: z.coerce.number().min(0).max(14),
-  dissolved_oxygen: z.coerce.number().min(0).max(20).optional(),
-  ammonia: z.coerce.number().min(0).max(10).optional(),
   timestamp: z.string().datetime().optional(),
 });
 
@@ -209,8 +205,6 @@ app.post("/sensor", async (req, res) => {
       temperature,
       water_level,
       ph,
-      dissolved_oxygen,
-      ammonia,
       timestamp,
     } = result.data;
 
@@ -220,29 +214,25 @@ app.post("/sensor", async (req, res) => {
     const lastData = lastReading.rows[0];
 
     const insertResult = await pool.query(
-      `INSERT INTO sensors (device_id, temperature, water_level, ph, dissolved_oxygen, ammonia, timestamp)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO sensors (device_id, temperature, water_level, ph, timestamp)
+       VALUES ($1, $2, $3, $4, $5)
        RETURNING *`,
       [
         device_id,
         Number(temperature ?? 0),
         Number(water_level ?? 0),
         Number(ph ?? 0),
-        Number(dissolved_oxygen ?? 0),
-        Number(ammonia ?? 0),
         timestamp ? new Date(timestamp) : new Date(),
       ]
     );
 
     console.log(`[${new Date().toISOString()}] Sensor data saved:`, insertResult.rows[0]);
 
-    const settingsResult = await pool.query("SELECT * FROM sensor_settings LIMIT 1");
+  const settingsResult = await pool.query("SELECT * FROM sensor_settings LIMIT 1");
     const settings = settingsResult.rows[0] || {
       temp_min: 20.0, temp_max: 31.0,
       ph_min: 6.5, ph_max: 8.5,
-      do_min: 5.0, do_max: 10.0,
       water_level_min: 10.0, water_level_max: 100.0,
-      ammonia_min: 0.0, ammonia_max: 0.5
     };
 
     const now = new Date();
@@ -254,9 +244,7 @@ app.post("/sensor", async (req, res) => {
     const sensorChecks = [
       { key: "Temperature", val: Number(temperature), min: settings.temp_min, max: settings.temp_max },
       { key: "pH Level", val: Number(ph), min: settings.ph_min, max: settings.ph_max },
-      { key: "Dissolved Oxygen", val: Number(dissolved_oxygen), min: settings.do_min, max: settings.do_max },
       { key: "Water Level", val: Number(water_level), min: settings.water_level_min, max: settings.water_level_max },
-      { key: "Ammonia", val: Number(ammonia), min: settings.ammonia_min, max: settings.ammonia_max },
     ];
 
     for (const sensor of sensorChecks) {
@@ -298,16 +286,12 @@ app.post("/sensor", async (req, res) => {
           const unitMap = {
             "Temperature": "°C",
             "pH Level": "",
-            "Dissolved Oxygen": "mg/L",
             "Water Level": "%",
-            "Ammonia": "ppm",
           };
           const emojiMap = {
             "Temperature": "🌡️",
             "pH Level": "🧪",
-            "Dissolved Oxygen": "💨",
             "Water Level": "💧",
-            "Ammonia": "☠️",
           };
           const unit = unitMap[sensor.key] || "";
           const emoji = emojiMap[sensor.key] || "⚠️";
@@ -440,25 +424,12 @@ app.get("/settings", async (req, res) => {
         temp_max: 31.0,
         ph_min: 6.5,
         ph_max: 8.5,
-        do_min: 5.0,
-        do_max: 10.0,
         water_level_min: 10.0,
         water_level_max: 100.0,
-        ammonia_min: 0.0,
-        ammonia_max: 0.5,
       };
       return res.json(defaultSettings);
     }
     const dbSettings = result.rows[0];
-    const defaults = {
-      do_max: 10.0,
-      ammonia_min: 0.0,
-    };
-    for (const key of Object.keys(defaults)) {
-      if (dbSettings[key] == null || dbSettings[key] === undefined) {
-        dbSettings[key] = defaults[key];
-      }
-    }
     res.json(dbSettings);
   } catch (err) {
     console.error(`[${new Date().toISOString()}] Error fetching settings:`, err);
@@ -473,14 +444,10 @@ app.post("/settings", async (req, res) => {
       temp_max,
       ph_min,
       ph_max,
-      do_min,
-      do_max,
       water_level_min,
       water_level_max,
-      ammonia_min,
-      ammonia_max,
     } = req.body;
-
+    
     const existing = await pool.query("SELECT id FROM sensor_settings LIMIT 1");
     
     let result;
@@ -488,16 +455,15 @@ app.post("/settings", async (req, res) => {
       result = await pool.query(
         `UPDATE sensor_settings SET 
           temp_min = $1, temp_max = $2, ph_min = $3, ph_max = $4,
-          do_min = $5, do_max = $6, water_level_min = $7, water_level_max = $8,
-          ammonia_min = $9, ammonia_max = $10
-        WHERE id = $11 RETURNING *`,
-        [temp_min, temp_max, ph_min, ph_max, do_min, do_max, water_level_min, water_level_max, ammonia_min, ammonia_max, existing.rows[0].id]
+          water_level_min = $5, water_level_max = $6
+        WHERE id = $7 RETURNING *`,
+        [temp_min, temp_max, ph_min, ph_max, water_level_min, water_level_max, existing.rows[0].id]
       );
     } else {
       result = await pool.query(
-        `INSERT INTO sensor_settings (temp_min, temp_max, ph_min, ph_max, do_min, do_max, water_level_min, water_level_max, ammonia_min, ammonia_max)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-        [temp_min, temp_max, ph_min, ph_max, do_min, do_max, water_level_min, water_level_max, ammonia_min, ammonia_max]
+        `INSERT INTO sensor_settings (temp_min, temp_max, ph_min, ph_max, water_level_min, water_level_max)
+          VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+        [temp_min, temp_max, ph_min, ph_max, water_level_min, water_level_max]
       );
     }
 
@@ -689,8 +655,6 @@ async function startServer() {
           temperature DECIMAL(5,2) DEFAULT 0,
           water_level DECIMAL(5,2) DEFAULT 0,
           ph DECIMAL(5,2) DEFAULT 0,
-          dissolved_oxygen DECIMAL(5,2) DEFAULT 0,
-          ammonia DECIMAL(5,2) DEFAULT 0,
           timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
       `);
@@ -713,23 +677,11 @@ async function startServer() {
           temp_max DECIMAL(5,2) DEFAULT 31.0,
           ph_min DECIMAL(5,2) DEFAULT 6.5,
           ph_max DECIMAL(5,2) DEFAULT 8.5,
-          do_min DECIMAL(5,2) DEFAULT 5.0,
-          do_max DECIMAL(5,2) DEFAULT 10.0,
           water_level_min DECIMAL(5,2) DEFAULT 10.0,
           water_level_max DECIMAL(5,2) DEFAULT 100.0,
-          ammonia_min DECIMAL(5,2) DEFAULT 0.0,
-          ammonia_max DECIMAL(5,2) DEFAULT 0.5,
           updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
       `);
-      
-        await client.query(`
-          ALTER TABLE sensor_settings ADD COLUMN IF NOT EXISTS do_max DECIMAL(5,2) DEFAULT 10.0
-        `);
-        
-        await client.query(`
-          ALTER TABLE sensor_settings ADD COLUMN IF NOT EXISTS ammonia_min DECIMAL(5,2) DEFAULT 0.0
-        `);
 
       await client.query(`
         CREATE TABLE IF NOT EXISTS activity_logs (

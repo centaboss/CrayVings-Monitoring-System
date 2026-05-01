@@ -16,7 +16,7 @@ export default function DashboardPage() {
     if (!data) return { safe: true, messages: ["No sensor data"] };
     
     const messages: string[] = [];
-    const sensorKeys = ["temperature", "ph", "dissolved_oxygen", "ammonia", "water_level"] as const;
+    const sensorKeys = ["temperature", "ph", "water_level"] as const;
     
     for (const key of sensorKeys) {
       const threshold = thresholds[key];
@@ -37,7 +37,7 @@ export default function DashboardPage() {
 
   return (
     <>
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-2 md:gap-3 mb-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-2 md:gap-3 mb-4">
         <StatCard
           title="Temperature"
           value={`${data?.temperature ?? 0}°C`}
@@ -46,7 +46,7 @@ export default function DashboardPage() {
         />
         <StatCard
           title="Water Level"
-          value={`${data?.water_level ?? 0}`}
+          value={`${data?.water_level ?? 0}%`}
           color="#2563eb"
           icon={<Waves size={18} />}
         />
@@ -55,18 +55,6 @@ export default function DashboardPage() {
           value={`${data?.ph ?? 0}`}
           color="#6366f1"
           icon={<FlaskConical size={18} />}
-        />
-        <StatCard
-          title="Ammonia"
-          value={`${data?.ammonia ?? 0}`}
-          color="#06b6d4"
-          icon={<AlertTriangle size={18} />}
-        />
-        <StatCard
-          title="Dissolved O₂"
-          value={`${data?.dissolved_oxygen ?? 0}`}
-          color="#10b981"
-          icon={<Droplets size={18} />}
         />
       </div>
 
@@ -131,7 +119,7 @@ export default function DashboardPage() {
                   <tr key={i} className="border-t">
                     <td className="py-1">{h.name}</td>
                     <td className="text-center py-1">{h.temperature}°C</td>
-                    <td className="text-center py-1">{h.water_level}</td>
+                    <td className="text-center py-1">{h.water_level}%</td>
                     <td className="text-center py-1">{h.ph}</td>
                   </tr>
                 ))}

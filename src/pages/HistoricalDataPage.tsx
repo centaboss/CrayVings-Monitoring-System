@@ -110,7 +110,7 @@ export default function HistoricalDataPage() {
       </div>
 
       {chartData.length > 0 && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
           <div className="bg-white rounded-xl border border-gray-100 p-4">
             <div className="flex items-center gap-2 text-gray-500 mb-1">
               <Thermometer size={14} />
@@ -140,16 +140,6 @@ export default function HistoricalDataPage() {
               {latestReading?.water_level ?? "--"}%
             </div>
           </div>
-
-          <div className="bg-white rounded-xl border border-gray-100 p-4">
-            <div className="flex items-center gap-2 text-gray-500 mb-1">
-              <Droplets size={14} />
-              <span className="text-xs font-medium">Dissolved O₂</span>
-            </div>
-            <div className="text-xl font-bold text-gray-800">
-              {latestReading?.dissolved_oxygen ?? "--"} mg/L
-            </div>
-          </div>
         </div>
       )}
 
@@ -172,12 +162,6 @@ export default function HistoricalDataPage() {
             data={chartData}
             dataKey="ph"
             stroke="#6366f1"
-          />
-          <TrendCard
-            title="Dissolved Oxygen"
-            data={chartData}
-            dataKey="dissolved_oxygen"
-            stroke="#0ea5e9"
           />
         </div>
       ) : (

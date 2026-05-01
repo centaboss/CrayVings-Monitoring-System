@@ -14,6 +14,7 @@ The CRAYvings Monitoring System is an IoT-based aquaculture monitoring solution 
 | Charts | Recharts | 3.8 |
 | Icons | lucide-react | 1.8 |
 | PDF Export | jsPDF + autoTable | 4.2 + 5.0 |
+| Routing | react-router-dom | 7.14 |
 | Backend | Express.js | 5.2 |
 | Database | PostgreSQL | 15+ |
 | ORM | pg (connection pool) | 8.20 |
@@ -41,8 +42,8 @@ The CRAYvings Monitoring System is an IoT-based aquaculture monitoring solution 
 │  - DS18B20 (Temperature)                                     - Home       │
 │  - Ultrasonic (Water Level)                                  - Dashboard  │
 │  - pH Probe                                                  - Sensors    │
-│  - DO Sensor                                                 - Alerts     │
-│  - Ammonia Sensor                                            - Historical │
+│                                                               - Alerts    │
+│                                                               - Historical│
 │                                                               - Settings  │
 │                                                               - Logs      │
 │                                                               - Activity  │
@@ -55,22 +56,21 @@ The CRAYvings Monitoring System is an IoT-based aquaculture monitoring solution 
 
 ### 1. Real-Time Water Quality Monitoring
 
-The system continuously monitors five critical water parameters:
+The system continuously monitors three critical water parameters collected by the ESP32:
 
 | Parameter | Sensor | Range | Unit | Default Threshold |
 |-----------|--------|-------|------|------------------|
-| Temperature | DS18B20 | -10 to 50 | °C | 20 - 31°C |
+| Temperature | DS18B20 | 0 to 50 | °C | 20 - 31°C |
 | Water Level | Ultrasonic HC-SR04 | 0 to 100 | % | 10 - 100% |
 | pH Level | pH Probe | 0 to 14 | - | 6.5 - 8.5 |
-| Dissolved Oxygen | DO Sensor | 0 to 20 | mg/L | 5 - 10 mg/L |
-| Ammonia | Ammonia Sensor | 0 to 10 | ppm | 0 - 0.5 ppm |
 
 **Features:**
-- Continuous data collection from ESP32 every 500ms (configurable)
+- Continuous data collection from ESP32 every 1000ms
+- Sensor validation before sending data (invalid readings skipped)
 - Real-time display updates every 3 seconds via polling
 - Visual indicators for sensor status (online/offline)
-- Timestamp tracking for all readings
 - Connection status detection (online/offline/unknown)
+- Only 3 sensors actively monitored (matches ESP32 hardware)
 
 ### 2. Intelligent Alert System
 
@@ -93,9 +93,9 @@ value slightly outside threshold:  WARNING (orange)
 ### 3. Data-Driven Insights & Analytics
 
 - **Historical data analysis** with time range filtering (1h, 6h, 24h, all)
-- **Trend charts** for all parameters using Recharts
+- **Trend charts** for Temperature, pH, and Water Level using Recharts
 - **Statistical summaries** on dashboard
-- **Export capability** via print-to-PDF
+- **Export capability** via PDF (LogsPage exports system logs)
 
 ### 4. Historical Data Analysis
 
@@ -145,9 +145,11 @@ value slightly outside threshold:  WARNING (orange)
 
 ### 10. PDF Export
 
-- Export dashboard data to PDF using jsPDF
-- Auto-table formatting for sensor data
-- Historical data export capability
+- Export system logs to PDF using jsPDF + jspdf-autotable
+- Parameter filtering (Temperature, pH Level, Water Level)
+- Summary section with parameter counts
+- Auto-table formatting with pagination support
+- Available in LogsPage
 
 ---
 
@@ -172,14 +174,12 @@ ESP32 ──POST──▶ /sensor ──Validate──▶ PostgreSQL ──Query
 The ESP32 microcontroller reads sensor values at regular intervals:
 
 - **Temperature**: DS18B20 waterproof sensor (OneWire protocol)
-- **Water Level**: Ultrasonic HC-SR04 distance sensor
-- **pH Level**: Analog pH probe with calibration
-- **Dissolved Oxygen**: DO sensor (optional)
-- **Ammonia**: Ammonia sensor (optional)
+- **Water Level**: Ultrasonic HC-SR04 distance sensor with averaging (5 samples)
+- **pH Level**: Analog pH probe with calibration and median filtering (10 samples)
 
 ### 2. Data Transmission
 
-The ESP32 sends a POST request to the backend server via Wi-Fi:
+The ESP32 sends a POST request to the backend server via Wi-Fi (only when all sensor readings are valid):
 
 ```http
 POST http://192.168.1.20:3000/sensor
@@ -189,10 +189,7 @@ Content-Type: application/json
   "device_id": "ESP32_01",
   "temperature": 25.5,
   "water_level": 80.0,
-  "ph": 7.2,
-  "dissolved_oxygen": 8.5,
-  "ammonia": 0.1,
-  "timestamp": "2026-04-25T12:00:00.000Z"
+  "ph": 7.2
 }
 ```
 
@@ -413,24 +410,31 @@ Method: POST
 Content-Type: application/json
 URL: http://<server>:3000/sensor
 Baud Rate: 19200
+WiFi: WiFiMulti for multiple network support
 ```
 
 ### Network Requirements
 
 - WiFi network (2.4GHz recommended for ESP32)
+- Multiple WiFi networks supported via WiFiMulti
 - Server on same local network
 - Port 3000 accessible
 - Static IP recommended for server
+- Auto-reconnect on WiFi drop
 
 ### Sensor Types & Measurement Ranges
 
 | Sensor | Type | Range | Accuracy | Pin |
 |--------|------|-------|----------|-----|
-| DS18B20 | Digital | -55°C to 125°C | ±0.5°C | GPIO4 |
-| HC-SR04 | Ultrasonic | 2cm - 400cm | ±3mm | GPIO5, GPIO18 |
+| DS18B20 | Digital | 0°C to 50°C | ±0.5°C | GPIO4 |
+| HC-SR04 | Ultrasonic | 0 - 100% | ±3mm | GPIO5, GPIO18 |
 | pH Probe | Analog | 0 - 14 | ±0.1 | GPIO34 |
-| DO Sensor | Analog | 0 - 20 mg/L | ±0.2 mg/L | (optional) |
-| Ammonia | Analog | 0 - 10 ppm | ±0.1 ppm | (optional) |
+
+### ESP32 Sensor Validation
+
+- **Temperature**: Valid range 0-50°C, error detection (-127°C = sensor error)
+- **Water Level**: Valid range 0-100%, ultrasonic echo validation, 5-sample averaging
+- **pH**: Valid range 0-14, median filter (10 samples, discard highest/lowest 2)
 
 ---
 
@@ -521,10 +525,10 @@ src/
 │   ├── HomePage.tsx       # Landing page with status overview
 │   ├── DashboardPage.tsx # Main monitoring view
 │   ├── SensorsPage.tsx   # Individual sensor details
-│   ├── AlertsPage.tsx   # Alert history
-│   ├── HistoricalDataPage.tsx # Trend charts with PDF export
-│   ├── SettingsPage.tsx  # Threshold + recipient management
-│   ├── LogsPage.tsx     # System log viewer
+│   ├── AlertsPage.tsx       # Alert history with Alert/Change filtering
+│   ├── HistoricalDataPage.tsx # Trend charts with time range filtering
+│   ├── SettingsPage.tsx      # Threshold + recipient management
+│   ├── LogsPage.tsx          # System log viewer with parameter filtering + PDF export
 │   └── ActivityLogsPage.tsx # User activity tracking
 ├── types/
 │   └── index.ts         # TypeScript types and helpers

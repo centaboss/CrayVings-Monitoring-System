@@ -4,7 +4,7 @@ import { useFloatingAlerts } from "../hooks/useFloatingAlerts";
 import { getSettingsThresholds, getThresholdStatus, type ThresholdStatus } from "../types";
 
 const ALERT_COOLDOWN_MS = 60000; // 60 seconds to avoid spam
-const SENSOR_KEYS = ["temperature", "water_level", "ph", "dissolved_oxygen", "ammonia"] as const;
+const SENSOR_KEYS = ["temperature", "water_level", "ph"] as const;
 
 function toNumber(value: string | number | undefined): number {
   if (typeof value === "number") return value;

@@ -1,28 +1,30 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <WiFiMulti.h>
 #include <HTTPClient.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <esp_task_wdt.h>
-#include <WiFiManager.h>  // ← Correct library include
 
 #define ONE_WIRE_BUS 4
 #define TRIG_PIN 5
 #define ECHO_PIN 18
 #define PH_PIN 34
 
-const char* serverName = "http://192.168.100.17:3000/sensor";
+// ====================== WIFI NETWORKS ======================
+// Add all your networks here — ESP32 will auto-connect to whichever is available
+WiFiMulti wifiMulti;
+
+const char* serverName = "http://192.168.1.20:3000/sensor";
 
 const float TANK_HEIGHT_CM = 30.0f;
 const int ULTRASONIC_SAMPLES = 5;
 const int SAMPLE_DELAY_MS = 50;
 const int LOOP_DELAY_MS = 1000;
 const int HTTP_TIMEOUT_MS = 5000;
+const int WIFI_CONNECT_TIMEOUT_MS = 20000;
 
-// Watchdog timeout (must be longer than worst-case reconnect)
-const int WDT_TIMEOUT_SEC = 60;
-
-const float PH_CALIBRATION_OFFSET = 20.39f;
+const float PH_CALIBRATION_OFFSET = 19.77f;
 const float VOLTAGE_REFERENCE = 3.3f;
 const int ADC_RESOLUTION = 4095;
 const float ADC_TO_VOLT = (VOLTAGE_REFERENCE / ADC_RESOLUTION);
@@ -44,9 +46,6 @@ DallasTemperature sensors(&oneWire);
 
 int buffer_arr[10];
 float ph_act;
-
-// WiFiManager instance
-WiFiManager wm;
 
 // ====================== VALIDATION ======================
 bool isTemperatureValid(float temp) {
@@ -146,11 +145,36 @@ float readPH() {
   return ph_act;
 }
 
+// ====================== WIFI CONNECT ======================
+bool connectWiFi() {
+  Serial.print("Connecting to best available WiFi");
+
+  unsigned long startTime = millis();
+
+  while (wifiMulti.run() != WL_CONNECTED) {
+    esp_task_wdt_reset();
+
+    if (millis() - startTime >= WIFI_CONNECT_TIMEOUT_MS) {
+      Serial.println("\nWiFi connection timed out! Will retry next loop.");
+      return false;
+    }
+
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("\nWiFi Connected!");
+  Serial.print("Connected to: ");
+  Serial.println(WiFi.SSID());
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
+  return true;
+}
+
 // ====================== SETUP ======================
 void setup() {
   Serial.begin(19200);
 
-  // ←←← ADD THIS LINE (cleans up previous watchdog)
   esp_task_wdt_deinit();
 
   pinMode(TRIG_PIN, OUTPUT);
@@ -158,28 +182,23 @@ void setup() {
   pinMode(PH_PIN, INPUT);
   sensors.begin();
 
-  // Longer watchdog timeout (gives WiFiManager more time)
+  // =============================================
+  // ADD YOUR WIFI NETWORKS HERE
+  // Format: wifiMulti.addAP("SSID", "password");
+  // =============================================
+  wifiMulti.addAP("AIRLINK_MADUCDOC-2.4G", "64j91g6d");
+  wifiMulti.addAP("BULACLAC-ASUS",         "1557STzone2");
+  // Add more networks as needed
+
   esp_task_wdt_config_t wdt_config = {
-    .timeout_ms = 120000,  // 2 minutes
+    .timeout_ms = 120000,
     .idle_core_mask = 0,
     .trigger_panic = true
   };
   esp_task_wdt_init(&wdt_config);
   esp_task_wdt_add(NULL);
 
-  Serial.println("Starting WiFiManager...");
-
-  wm.setConfigPortalTimeout(180);
-  wm.setConnectTimeout(30);  // Increased
-
-  if (!wm.autoConnect("CRAYVINGS-ESP32-Setup")) {
-    Serial.println("Failed to connect → restarting");
-    ESP.restart();
-  }
-
-  Serial.println("✅ WiFi Connected!");
-  Serial.print("IP Address: ");
-  Serial.println(WiFi.localIP());
+  connectWiFi();
 }
 
 // ====================== MAIN LOOP ======================
@@ -202,18 +221,18 @@ void loop() {
 
   float phValue = readPH();
 
-  // Reconnect if WiFi drops (FIXED HERE)
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("WiFi lost → reconnecting...");
-    WiFi.reconnect();  // ← This is the corrected line
+  // Auto-reconnect to best available network if WiFi drops
+  if (wifiMulti.run() != WL_CONNECTED) {
+    Serial.println("WiFi lost → reconnecting to best available network...");
+    connectWiFi();
   }
 
   // Validate sensors
-  bool tempOK = isTemperatureValid(tempC);
+  bool tempOK  = isTemperatureValid(tempC);
   bool levelOK = isWaterLevelValid(waterLevel);
-  bool phOK = isPHValid(phValue);
+  bool phOK    = isPHValid(phValue);
 
-  // Send data only if WiFi is connected AND all sensors are valid
+  // Send data only if WiFi connected AND all sensors valid
   if (WiFi.status() == WL_CONNECTED && tempOK && levelOK && phOK) {
     HTTPClient http;
     http.setTimeout(HTTP_TIMEOUT_MS);
@@ -229,7 +248,7 @@ void loop() {
 
     if (code > 0) {
       if (code == 200 || code == 201) {
-        Serial.println("✅ Data successfully saved to database!");
+        Serial.println("Data successfully saved to database!");
       } else {
         Serial.print("Server responded with code: ");
         Serial.println(code);
@@ -241,7 +260,7 @@ void loop() {
 
     http.end();
   } else if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("Wi-Fi not connected, cannot send data.");
+    Serial.println("WiFi not connected, cannot send data.");
   } else {
     Serial.println("Data not sent: one or more sensor readings invalid.");
   }
@@ -253,9 +272,9 @@ void loop() {
   Serial.print(waterLevel, 2);
   Serial.print(" % | Water Temp: ");
   Serial.print(tempC, 2);
-  Serial.print(" °C | pH: ");
+  Serial.print(" C | pH: ");
   Serial.print(phValue, 2);
-  Serial.println();wh
+  Serial.println();
   Serial.println("------------------------");
 
   delay(LOOP_DELAY_MS);

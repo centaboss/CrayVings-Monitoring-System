@@ -17,28 +17,20 @@ const SETTING_BOUNDS: Record<string, { min: number; max: number }> = {
   temp_max: { min: -10, max: 50 },
   ph_min: { min: 0, max: 14 },
   ph_max: { min: 0, max: 14 },
-  do_min: { min: 0, max: 20 },
-  do_max: { min: 0, max: 20 },
   water_level_min: { min: 0, max: 100 },
   water_level_max: { min: 0, max: 100 },
-  ammonia_min: { min: 0, max: 10 },
-  ammonia_max: { min: 0, max: 10 },
 };
 
 const KEY_MAPPING: Record<string, { min: keyof SensorSettings; max: keyof SensorSettings }> = {
   temperature: { min: "temp_min", max: "temp_max" },
   ph: { min: "ph_min", max: "ph_max" },
-  dissolved_oxygen: { min: "do_min", max: "do_max" },
   water_level: { min: "water_level_min", max: "water_level_max" },
-  ammonia: { min: "ammonia_min", max: "ammonia_max" },
 };
 
 const THRESHOLD_COLORS: Record<string, { bg: string; border: string }> = {
   temperature: { bg: "bg-blue-50", border: "border-blue-100" },
   ph: { bg: "bg-emerald-50", border: "border-emerald-100" },
-  dissolved_oxygen: { bg: "bg-sky-50", border: "border-sky-100" },
   water_level: { bg: "bg-indigo-50", border: "border-indigo-100" },
-  ammonia: { bg: "bg-orange-50", border: "border-orange-100" },
 };
 
 function validateSetting(key: keyof SensorSettings, value: number): { valid: boolean; message?: string } {

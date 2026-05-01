@@ -28,34 +28,32 @@ This can help reduce risks caused by poor water conditions and improve overall m
 ## Features
 
 ### Core Features
-- **Real-time sensor monitoring** - Temperature, pH, dissolved oxygen, water level, ammonia
-- **ESP32-based data collection** - Wireless sensor data transmission
+- **Real-time sensor monitoring** - Temperature, pH, water level (3 sensors via ESP32)
+- **ESP32-based data collection** - Wireless sensor data transmission with WiFiMulti + validation
 - **Web dashboard** - Responsive React UI with icon-based navigation
 - **Database storage** - PostgreSQL for historical data
-- **Smart alerts** - Threshold-based notifications with cooldown
+- **Smart alerts** - Threshold-based notifications with cooldown (3 sensors only)
 - **SMS notifications** - Critical alerts via SkySMS API
 - **Recipient management** - Manage SMS alert recipients
 - **Custom alert sounds** - Audio alerts via Web Audio API
-- **PDF export** - Export dashboard data to PDF
+- **PDF export** - Export system logs to PDF (LogsPage)
 - **Activity logging** - Track user interactions
 
 ### Monitoring Parameters
 | Parameter | Sensor | Safe Range |
 |-----------|--------|------------|
 | Temperature | DS18B20 | 20 - 31°C |
-| Water Level | Ultrasonic | 10 - 100% |
+| Water Level | Ultrasonic HC-SR04 | 10 - 100% |
 | pH Level | pH Probe | 6.5 - 8.5 |
-| Dissolved Oxygen | DO Sensor | 5 - 10 mg/L |
-| Ammonia | Ammonia Sensor | 0 - 0.5 ppm |
 
 ### Dashboard Pages
 - **Home** - Overview and quick stats
 - **Dashboard** - Live readings and charts
 - **Sensors** - Individual sensor details
-- **Alerts** - Alert history
-- **Historical Data** - Trend charts over time (with PDF export)
+- **Alerts** - Alert history with filtering (Alert/Change)
+- **Historical Data** - Trend charts over time
 - **Activity Logs** - User activity tracking
-- **Logs** - System event logs
+- **Logs** - System event logs with parameter filtering and PDF export
 - **Settings** - Configure thresholds and manage SMS recipients
 
 ---
@@ -63,12 +61,10 @@ This can help reduce risks caused by poor water conditions and improve overall m
 ## Technologies Used
 
 ### Hardware
-- **ESP32 DevKit V1**
-- **DS18B20** - Temperature sensor
-- **HC-SR04** - Ultrasonic distance sensor
-- **pH Probe** - pH measurement
-- **DO Sensor** - Dissolved oxygen (optional)
-- **Ammonia Sensor** - Ammonia level (optional)
+- **ESP32 DevKit V1** with WiFiMulti support (auto-connects to best available network)
+- **DS18B20** - Temperature sensor (GPIO4, OneWire protocol)
+- **HC-SR04** - Ultrasonic distance sensor (GPIO5, GPIO18, 5-sample averaging)
+- **pH Probe** - pH measurement (GPIO34, 10-sample median filter, calibration offset)
 
 ### Software
 | Component | Technology | Version |
@@ -79,6 +75,7 @@ This can help reduce risks caused by poor water conditions and improve overall m
 | Charts | Recharts | 3.8 |
 | Icons | lucide-react | 1.8 |
 | PDF Export | jsPDF + autoTable | 4.2 + 5.0 |
+| Routing | react-router-dom | 7.14 |
 | HTTP Client | Axios | 1.15 |
 | Backend | Express.js | 5.2 |
 | Database | PostgreSQL | 15+ |
@@ -172,11 +169,14 @@ Dashboard opens at http://localhost:5173
 
 ### 5. Connect ESP32
 
-Configure in Arduino IDE:
+Configure in Arduino IDE (19200 baud rate):
 
 ```cpp
 // ESP32 code - esp32code.ino
 const char* serverName = "http://192.168.1.20:3000/sensor";
+
+// Add your WiFi networks (WiFiMulti auto-connects)
+wifiMulti.addAP("SSID", "password");
 ```
 
 ---
@@ -251,10 +251,10 @@ src/
 │   ├── HomePage.tsx
 │   ├── DashboardPage.tsx
 │   ├── SensorsPage.tsx
-│   ├── AlertsPage.tsx
+│   ├── AlertsPage.tsx       # Alert/Change filtering
 │   ├── HistoricalDataPage.tsx
 │   ├── SettingsPage.tsx
-│   ├── LogsPage.tsx
+│   ├── LogsPage.tsx         # Parameter filtering + PDF export
 │   └── ActivityLogsPage.tsx
 ├── types/index.ts        # TypeScript types
 ├── utils/              # Utilities

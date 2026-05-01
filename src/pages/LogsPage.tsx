@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback } from "react";
-import { FileText, Download, Clock, Thermometer, Droplets, Waves, FlaskConical, AlertCircle } from "lucide-react";
+import { FileText, Download, Clock, Thermometer, Waves, FlaskConical } from "lucide-react";
 import { useSensors } from "../hooks/useSensors";
 import { jsPDF } from "jspdf";
 import "jspdf-autotable";
@@ -8,11 +8,9 @@ const PARAMETER_ICONS: Record<string, React.ReactNode> = {
   Temperature: <Thermometer size={14} className="text-blue-500" />,
   "pH Level": <FlaskConical size={14} className="text-emerald-500" />,
   "Water Level": <Waves size={14} className="text-indigo-500" />,
-  "Dissolved Oxygen": <Droplets size={14} className="text-sky-500" />,
-  Ammonia: <AlertCircle size={14} className="text-orange-500" />,
 };
 
-const PARAMETERS = ["all", "Temperature", "pH Level", "Water Level", "Dissolved Oxygen", "Ammonia"] as const;
+const PARAMETERS = ["all", "Temperature", "pH Level", "Water Level"] as const;
 type ParameterFilter = typeof PARAMETERS[number];
 
 export default function LogsPage() {
@@ -46,10 +44,12 @@ export default function LogsPage() {
     doc.setFont("helvetica", "normal");
     doc.text(`Generated on ${new Date().toLocaleString()}`, pageWidth / 2, 28, { align: "center" });
 
-    const parameterCounts = filteredLogs.reduce<Record<string, number>>((acc, log) => {
+  const parameterCounts = filteredLogs.reduce<Record<string, number>>((acc, log) => {
+    if (["Temperature", "pH Level", "Water Level"].includes(log.parameter)) {
       acc[log.parameter] = (acc[log.parameter] || 0) + 1;
-      return acc;
-    }, {});
+    }
+    return acc;
+  }, { Temperature: 0, "pH Level": 0, "Water Level": 0 });
 
     const summaryY = 34;
     doc.setFontSize(11);
@@ -69,7 +69,9 @@ export default function LogsPage() {
 
     const tableStartY = summaryLineY + 8;
 
-    const tableData = filteredLogs.map((log) => [
+  const tableData = filteredLogs
+    .filter((log) => ["Temperature", "pH Level", "Water Level"].includes(log.parameter))
+    .map((log) => [
       log.timestamp ? new Date(log.timestamp).toLocaleString() : "-",
       log.parameter,
       String(log.old_value),

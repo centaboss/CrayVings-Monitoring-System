@@ -4,8 +4,6 @@ export type SensorEntry = {
   temperature: number;
   water_level: number;
   ph: number;
-  dissolved_oxygen: number;
-  ammonia: number;
   timestamp?: string;
 };
 
@@ -14,8 +12,6 @@ export type ChartPoint = {
   temperature: number;
   water_level: number;
   ph: number;
-  dissolved_oxygen: number;
-  ammonia: number;
 };
 
 export const VALID_MENU_KEYS = [
@@ -50,26 +46,18 @@ export type SensorSettings = {
   temp_max: number;
   ph_min: number;
   ph_max: number;
-  do_min: number;
-  do_max: number;
   water_level_min: number;
   water_level_max: number;
-  ammonia_min: number;
-  ammonia_max: number;
   updated_at?: string;
 };
 
 export const DEFAULT_SETTINGS: SensorSettings = {
-  temp_min: 20.0,
-  temp_max: 31.0,
-  ph_min: 6.5,
-  ph_max: 8.5,
-  do_min: 5.0,
-  do_max: 10.0,
-  water_level_min: 10.0,
-  water_level_max: 100.0,
-  ammonia_min: 0.0,
-  ammonia_max: 0.5,
+  temp_min:20.0,
+  temp_max:31.0,
+  ph_min:6.5,
+  ph_max:8.5,
+  water_level_min:10.0,
+  water_level_max:100.0,
 };
 
 export type ThresholdRange = {
@@ -102,26 +90,12 @@ export function getSettingsThresholds(settings: SensorSettings | null): Record<s
       isMinOnly: false,
       color: "text-purple-500",
     },
-    dissolved_oxygen: {
-      name: "Dissolved Oxygen",
-      unit: "mg/L",
-      range: { min: defaults.do_min, max: defaults.do_max },
-      isMinOnly: false,
-      color: "text-sky-500",
-    },
     water_level: {
       name: "Water Level",
       unit: "%",
       range: { min: defaults.water_level_min, max: defaults.water_level_max },
       isMinOnly: false,
       color: "text-blue-500",
-    },
-    ammonia: {
-      name: "Ammonia",
-      unit: "ppm",
-      range: { min: defaults.ammonia_min, max: defaults.ammonia_max },
-      isMinOnly: false,
-      color: "text-amber-500",
     },
   };
 }
@@ -168,8 +142,6 @@ export function parseAlertSeverity(log: LogEntry): AlertSeverity {
     return val > 35 || val < 15 ? "critical" : "warning";
   } else if (param === "pH Level") {
     return val > 9 || val < 5 ? "critical" : "warning";
-  } else if (param === "Dissolved Oxygen" || param === "Ammonia") {
-    return "critical";
   }
   return "warning";
 }

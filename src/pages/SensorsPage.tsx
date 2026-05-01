@@ -42,22 +42,18 @@ export default function SensorsPage() {
   }, [data?.timestamp, connectionStatus]);
 
   const sensors = useMemo(() => {
-    const sensorKeys = ["temperature", "ph", "dissolved_oxygen", "water_level", "ammonia"] as const;
+    const sensorKeys = ["temperature", "ph", "water_level"] as const;
     
     const icons: Record<string, React.ReactNode> = {
       temperature: <Thermometer size={20} />,
       ph: <FlaskConical size={20} />,
-      dissolved_oxygen: <Droplets size={20} />,
       water_level: <Waves size={20} />,
-      ammonia: <AlertTriangle size={20} />,
     };
     
     const colors: Record<string, { color: string; bg: string; border: string }> = {
       temperature: { color: "text-orange-500", bg: "bg-orange-50", border: "border-orange-200" },
       ph: { color: "text-purple-500", bg: "bg-purple-50", border: "border-purple-200" },
-      dissolved_oxygen: { color: "text-sky-500", bg: "bg-sky-50", border: "border-sky-200" },
       water_level: { color: "text-blue-500", bg: "bg-blue-50", border: "border-blue-200" },
-      ammonia: { color: "text-amber-500", bg: "bg-amber-50", border: "border-amber-200" },
     };
     
     return sensorKeys.map((key) => {

@@ -64,8 +64,6 @@ export async function fetchSensorHistory(limit = 50, signal?: AbortSignal): Prom
       temperature: item.temperature ?? 0,
       water_level: item.water_level ?? 0,
       ph: item.ph ?? 0,
-      dissolved_oxygen: item.dissolved_oxygen ?? 0,
-      ammonia: item.ammonia ?? 0,
     }));
 }
 
