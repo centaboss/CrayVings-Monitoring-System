@@ -96,13 +96,15 @@ value slightly outside threshold:  WARNING (orange)
 - **Trend charts** for Temperature, pH, and Water Level using Recharts
 - **Statistical summaries** on dashboard
 - **Export capability** via PDF (LogsPage exports system logs)
+- **Flexible history fetching** - Backend supports up to 1000 records (default: 300)
 
 ### 4. Historical Data Analysis
 
 - Store all sensor readings in PostgreSQL
-- Query historical data with pagination
+- Query historical data with configurable limit (up to 1000 records)
 - Time-based filtering (1 hour, 6 hours, 24 hours, all time)
 - Data visualization with line charts
+- Fixed filtering logic ensures proper hourly data display
 
 ### 5. Mobile-Responsive Dashboard
 
@@ -202,6 +204,8 @@ The Express server (`server.cjs`) performs these operations:
 3. **Threshold Checking**: Compares values against configurable settings
 4. **Alert Generation**: Creates alerts for out-of-range values
 5. **Logging**: Records all alerts to `system_logs` table
+6. **History API**: Accepts `limit` parameter (1-1000, default: 300) for flexible data retrieval
+6. **History API**: Accepts `limit` parameter (1-1000, default: 300) for flexible data retrieval
 
 ### 4. Frontend Display
 
@@ -276,24 +280,24 @@ Users can configure thresholds in **Settings**:
 
 ### Complete API Reference
 
-| Endpoint | Method | Description | Request Body | Response |
-|----------|--------|-------------|--------------|----------|
-| `/` | GET | Server info | - | `{message, routes: []}` |
-| `/health` | GET | Health check | - | `{status, database, documents, serverTime}` |
-| `/sensor` | POST | Submit sensor data | Sensor payload | `{message, data}` |
-| `/sensor` | GET | Get history | - | `SensorEntry[]` |
-| `/sensor/latest` | GET | Get latest | - | `SensorEntry` |
-| `/settings` | GET | Get thresholds | - | `SensorSettings` |
-| `/settings` | POST | Update thresholds | Partial Settings | `{message, data}` |
-| `/settings/recipients` | GET | Get all recipients | - | `{data: Recipient[]}` |
-| `/settings/recipients` | POST | Add new recipient | `{phone_number, name}` | `{success, data}` |
-| `/settings/recipients/:id` | PUT | Update recipient | `{name, is_active}` | `{success, data}` |
-| `/settings/recipients/:id` | DELETE | Delete recipient | - | `{success, message}` |
-| `/settings/recipients/test/:id` | POST | Send test SMS | - | `{success, message}` |
-| `/system-logs` | GET | Get logs | `?page=&limit=` | `{data, total}` |
-| `/logs` | POST | Create log | `{action, parameter, old_value, new_value}` | `{message, data}` |
-| `/activity-logs` | GET | Get activity | `?page=&limit=&search=&sortBy=` | `{data, total, page, limit, totalPages}` |
-| `/activity-logs` | POST | Create activity | `{action_type, description, module}` | `{message, data}` |
+| Endpoint | Method | Description | Query Params | Request Body | Response |
+|----------|--------|-------------|--------------|--------------|----------|
+| `/` | GET | Server info | - | - | `{message, routes: []}` |
+| `/health` | GET | Health check | - | - | `{status, database, documents, serverTime}` |
+| `/sensor` | POST | Submit sensor data | - | Sensor payload | `{message, data}` |
+| `/sensor` | GET | Get history | `limit` (1-1000, default: 300) | - | `SensorEntry[]` |
+| `/sensor/latest` | GET | Get latest | - | - | `SensorEntry` |
+| `/settings` | GET | Get thresholds | - | - | `SensorSettings` |
+| `/settings` | POST | Update thresholds | - | Partial Settings | `{message, data}` |
+| `/settings/recipients` | GET | Get all recipients | - | - | `{data: Recipient[]}` |
+| `/settings/recipients` | POST | Add new recipient | - | `{phone_number, name}` | `{success, data}` |
+| `/settings/recipients/:id` | PUT | Update recipient | - | `{name, is_active}` | `{success, data}` |
+| `/settings/recipients/:id` | DELETE | Delete recipient | - | - | `{success, message}` |
+| `/settings/recipients/test/:id` | POST | Send test SMS | - | - | `{success, message}` |
+| `/system-logs` | GET | Get logs | `page`, `limit` | - | `{data, total}` |
+| `/logs` | POST | Create log | - | `{action, parameter, old_value, new_value}` | `{message, data}` |
+| `/activity-logs` | GET | Get activity | `page`, `limit`, `search`, `sortBy`, `actionType` | - | `{data, total, page, limit, totalPages}` |
+| `/activity-logs` | POST | Create activity | - | `{action_type, description, module}` | `{message, data}` |
 
 ---
 

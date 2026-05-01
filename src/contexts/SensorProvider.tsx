@@ -98,7 +98,7 @@ function useSensorDataPolling(): SensorDataState & { refetch: () => void } {
     try {
       const [latest, historyData] = await Promise.all([
         fetchLatestSensor(abortControllerRef.current.signal),
-        fetchSensorHistory(50, abortControllerRef.current.signal),
+        fetchSensorHistory(300, abortControllerRef.current.signal),
       ]);
 
       if (latest) {

@@ -3,8 +3,6 @@ import {
   Thermometer, 
   Waves, 
   FlaskConical, 
-  Droplets,
-  AlertTriangle,
   Radio,
   Activity,
   CheckCircle,
