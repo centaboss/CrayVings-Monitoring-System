@@ -1,6 +1,15 @@
 import axios, { isAxiosError, type AxiosError } from "axios";
-import type { SensorEntry, ChartPoint, LogEntry, SensorSettings, ActivityLog, ActivityLogEntry } from "../types";
+import type { SensorEntry, ChartPoint, LogEntry, SensorSettings, ActivityLog, ActivityLogEntry, AuthResponse } from "../types";
 import { API_BASE } from "../types";
+
+export interface UserEntry {
+  id: number;
+  name: string;
+  username: string;
+  email: string;
+  role: string;
+  created_at: string;
+}
 
 const client = axios.create({
   baseURL: API_BASE,
@@ -8,6 +17,14 @@ const client = axios.create({
   headers: {
     "Content-Type": "application/json",
   },
+});
+
+client.interceptors.request.use((config) => {
+  const token = localStorage.getItem("crayvings_token");
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
 });
 
 client.interceptors.response.use(
@@ -172,6 +189,55 @@ export async function fetchActivityLogs(
     signal,
   });
   return response.data;
+}
+
+export async function loginUser(
+  username: string,
+  password: string,
+  signal?: AbortSignal
+): Promise<AuthResponse> {
+  const response = await client.post<AuthResponse>(
+    "/auth/login",
+    { username, password },
+    { signal }
+  );
+  return response.data;
+}
+
+export async function fetchUsers(signal?: AbortSignal): Promise<UserEntry[]> {
+  const response = await client.get<UserEntry[]>("/auth/users", { signal });
+  return response.data;
+}
+
+export async function createUser(
+  name: string,
+  username: string,
+  email: string,
+  password: string,
+  role: string,
+  signal?: AbortSignal
+): Promise<UserEntry> {
+  const response = await client.post<{ data: UserEntry }>(
+    "/auth/users",
+    { name, username, email, password, role },
+    { signal }
+  );
+  return response.data.data;
+}
+
+export async function deleteUser(
+  userId: number,
+  signal?: AbortSignal
+): Promise<void> {
+  await client.delete(`/auth/users/${userId}`, { signal });
+}
+
+export async function resetUserPassword(
+  userId: number,
+  newPassword: string,
+  signal?: AbortSignal
+): Promise<void> {
+  await client.put(`/auth/users/${userId}/password`, { newPassword }, { signal });
 }
 
 export default client;

@@ -3,6 +3,7 @@ const cors = require("cors");
 const axios = require("axios");
 const { Pool } = require("pg");
 const { z } = require("zod");
+const crypto = require("crypto");
 require("dotenv").config();
 
 const app = express();
@@ -135,8 +136,8 @@ app.use(
         callback(new Error("Not allowed by CORS"));
       }
     },
-    methods: ["GET", "POST"],
-    allowedHeaders: ["Content-Type"],
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
 
@@ -544,6 +545,185 @@ app.get("/activity-logs", async (req, res) => {
   }
 });
 
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto.pbkdf2Sync(password, salt, 10000, 64, "sha512").toString("hex");
+  return `${salt}:${hash}`;
+}
+
+function verifyPassword(password, storedHash) {
+  const [salt, hash] = storedHash.split(":");
+  const verifyHash = crypto.pbkdf2Sync(password, salt, 10000, 64, "sha512").toString("hex");
+  return hash === verifyHash;
+}
+
+function generateToken() {
+  return crypto.randomBytes(32).toString("hex");
+}
+
+function requireAdmin(req, res, next) {
+  const token = req.headers.authorization?.replace("Bearer ", "");
+  if (!token) {
+    return res.status(401).json({ message: "Authentication required" });
+  }
+  pool.query("SELECT id, name, username, email, role FROM users WHERE token = $1", [token])
+    .then((result) => {
+      if (result.rows.length === 0) {
+        return res.status(401).json({ message: "Invalid or expired session" });
+      }
+      const user = result.rows[0];
+      if (user.role !== "admin") {
+        return res.status(403).json({ message: "Admin access required" });
+      }
+      req.adminUser = user;
+      next();
+    })
+    .catch((err) => {
+      console.error(`[${new Date().toISOString()}] Auth middleware error:`, err.message);
+      res.status(500).json({ message: "Server error" });
+    });
+}
+
+const loginSchema = z.object({
+  username: z.string().min(1),
+  password: z.string().min(1),
+});
+
+const createUserSchema = z.object({
+  name: z.string().min(2).max(100),
+  username: z.string().min(3).max(50).regex(/^[a-zA-Z0-9_]+$/, "Username can only contain letters, numbers, and underscores"),
+  email: z.string().email("Invalid email address"),
+  password: z.string().min(8, "Password must be at least 8 characters").max(100),
+  role: z.enum(["user", "admin"]),
+});
+
+app.post("/auth/login", async (req, res) => {
+  try {
+    const result = loginSchema.safeParse(req.body);
+    if (!result.success) {
+      return res.status(400).json({ message: "Invalid username or password" });
+    }
+
+    const { username, password } = result.data;
+
+    const userResult = await pool.query(
+      "SELECT id, name, username, email, role, password_hash FROM users WHERE username = $1",
+      [username]
+    );
+
+    if (userResult.rows.length === 0) {
+      return res.status(401).json({ message: "Invalid username or password" });
+    }
+
+    const user = userResult.rows[0];
+    if (!verifyPassword(password, user.password_hash)) {
+      return res.status(401).json({ message: "Invalid username or password" });
+    }
+
+    const token = generateToken();
+    await pool.query("UPDATE users SET token = $1 WHERE id = $2", [token, user.id]);
+
+    res.json({
+      message: "Login successful",
+      user: { id: user.id, username: user.username, email: user.email, role: user.role, name: user.name },
+      token,
+    });
+  } catch (err) {
+    console.error(`[${new Date().toISOString()}] Error logging in:`, err.message);
+    res.status(500).json({ message: "Login failed" });
+  }
+});
+
+app.get("/auth/users", requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT id, name, username, email, role, created_at FROM users ORDER BY created_at DESC"
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error(`[${new Date().toISOString()}] Error fetching users:`, err.message);
+    res.status(500).json({ message: "Failed to fetch users" });
+  }
+});
+
+app.post("/auth/users", requireAdmin, async (req, res) => {
+  try {
+    const result = createUserSchema.safeParse(req.body);
+    if (!result.success) {
+      return res.status(400).json({ message: "Validation error", errors: result.error.flatten().fieldErrors });
+    }
+
+    const { name, username, email, password, role } = result.data;
+
+    const existingUser = await pool.query("SELECT id FROM users WHERE username = $1 OR email = $2", [username, email]);
+    if (existingUser.rows.length > 0) {
+      return res.status(409).json({ message: "Username or email already exists" });
+    }
+
+    const passwordHash = hashPassword(password);
+
+    const insertResult = await pool.query(
+      `INSERT INTO users (name, username, email, password_hash, role, created_at)
+       VALUES ($1, $2, $3, $4, $5, NOW()) RETURNING id, name, username, email, role, created_at`,
+      [name, username, email, passwordHash, role]
+    );
+
+    const user = insertResult.rows[0];
+    console.log(`[${new Date().toISOString()}] User created: ${user.username} (${user.role}) by admin ${req.adminUser.username}`);
+
+    res.status(201).json({
+      message: "User created successfully",
+      data: user,
+    });
+  } catch (err) {
+    console.error(`[${new Date().toISOString()}] Error creating user:`, err.message);
+    res.status(500).json({ message: "Failed to create user" });
+  }
+});
+
+app.put("/auth/users/:id/password", requireAdmin, async (req, res) => {
+  try {
+    const userId = parseInt(req.params.id);
+    const { newPassword } = req.body;
+
+    if (!newPassword || newPassword.length < 8) {
+      return res.status(400).json({ message: "Password must be at least 8 characters" });
+    }
+
+    const passwordHash = hashPassword(newPassword);
+    await pool.query("UPDATE users SET password_hash = $1 WHERE id = $2", [passwordHash, userId]);
+
+    console.log(`[${new Date().toISOString()}] Password reset for user ID ${userId} by admin ${req.adminUser.username}`);
+
+    res.json({ message: "Password reset successfully" });
+  } catch (err) {
+    console.error(`[${new Date().toISOString()}] Error resetting password:`, err.message);
+    res.status(500).json({ message: "Failed to reset password" });
+  }
+});
+
+app.delete("/auth/users/:id", requireAdmin, async (req, res) => {
+  try {
+    const userId = parseInt(req.params.id);
+
+    if (req.adminUser.id === userId) {
+      return res.status(400).json({ message: "Cannot delete your own account" });
+    }
+
+    const result = await pool.query("DELETE FROM users WHERE id = $1 RETURNING username", [userId]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    console.log(`[${new Date().toISOString()}] User deleted: ${result.rows[0].username} by admin ${req.adminUser.username}`);
+
+    res.json({ message: "User deleted successfully" });
+  } catch (err) {
+    console.error(`[${new Date().toISOString()}] Error deleting user:`, err.message);
+    res.status(500).json({ message: "Failed to delete user" });
+  }
+});
+
 // Recipient management endpoints
 app.get("/settings/recipients", async (req, res) => {
   try {
@@ -706,6 +886,41 @@ async function startServer() {
           updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
       `);
+
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS users (
+          id SERIAL PRIMARY KEY,
+          name VARCHAR(100) NOT NULL,
+          username VARCHAR(50) NOT NULL UNIQUE,
+          email VARCHAR(255) NOT NULL UNIQUE,
+          password_hash VARCHAR(255) NOT NULL,
+          role VARCHAR(20) NOT NULL DEFAULT 'user',
+          token VARCHAR(255),
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+
+      const adminExists = await client.query("SELECT id, password_hash FROM users WHERE username = $1", ["admin"]);
+      if (adminExists.rows.length === 0) {
+        const adminPassword = hashPassword("Admin@123");
+        await client.query(
+          `INSERT INTO users (name, username, email, password_hash, role)
+           VALUES ('Administrator', 'admin', 'admin@crayvings.com', $1, 'admin')`,
+          [adminPassword]
+        );
+        console.log(`[${new Date().toISOString()}] Default admin account created (username: admin, password: Admin@123)`);
+      } else {
+        const storedHash = adminExists.rows[0].password_hash;
+        if (!verifyPassword("Admin@123", storedHash)) {
+          console.log(`[${new Date().toISOString()}] Admin password mismatch detected. Resetting to default...`);
+          const adminPassword = hashPassword("Admin@123");
+          await client.query("UPDATE users SET password_hash = $1 WHERE username = 'admin'", [adminPassword]);
+          console.log(`[${new Date().toISOString()}] Admin password reset to default: Admin@123`);
+        } else {
+          console.log(`[${new Date().toISOString()}] Admin account verified (username: admin)`);
+        }
+      }
 
       await client.query(`
         INSERT INTO authorized_recipients (phone_number, name)
