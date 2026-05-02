@@ -1,3 +1,4 @@
+
 {
   "name": "aquaculture-dashboard",
   "private": true,
@@ -6,7 +7,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "lint": "eslint .",
+    "lint": "eslint ."
+    ,
     "preview": "vite preview",
     "server": "node server.cjs",
     "start": "node server.cjs",

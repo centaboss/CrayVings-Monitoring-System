@@ -30,12 +30,13 @@ function StatCard({ title, value, description, gradient, icon }: Stat) {
 }
 
 export default function HomePage({ onNavigate }: Props) {
-  const { data, refetch, settings } = useSensors();
+  const { data, refetch, settings, loading, error, connectionStatus, lastUpdate } = useSensors();
   const [alertsDismissed, setAlertsDismissed] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   
   const thresholds = useMemo(() => getSettingsThresholds(settings), [settings]);
   
-  const hasData = !!data;
+  const hasData = !!data && !loading;
   
   const tankStatus = useMemo(() => {
     if (!hasData) return { safe: false, alerts: ["No sensor data"] };
@@ -61,6 +62,22 @@ export default function HomePage({ onNavigate }: Props) {
   }, [data, thresholds, hasData]);
 
   const getStatusBadge = () => {
+    if (loading) {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-blue-100 text-blue-600">
+          <RefreshCw size={14} className="animate-spin" />
+          Loading...
+        </span>
+      );
+    }
+    if (error) {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-red-100 text-red-700">
+          <AlertCircle size={14} />
+          Connection Error
+        </span>
+      );
+    }
     if (!hasData) {
       return (
         <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-600">
@@ -85,37 +102,45 @@ export default function HomePage({ onNavigate }: Props) {
     );
   };
 
+  const getConnectionStatusDot = () => {
+    if (loading) return "bg-blue-500 animate-pulse";
+    if (error) return "bg-red-500";
+    if (connectionStatus === "connected") return "bg-emerald-500";
+    if (connectionStatus === "connecting") return "bg-yellow-500 animate-pulse";
+    return "bg-gray-400";
+  };
+
   const stats: Stat[] = [
     {
       title: "Water Temperature",
-      value: data ? `${data.temperature}°C` : "--°C",
+      value: loading ? "Loading..." : error ? "Error" : data ? `${data.temperature}°C` : "--°C",
       description: `Threshold: ${thresholds.temperature.range.min}-${thresholds.temperature.range.max}°C`,
-      gradient: "from-blue-500 to-cyan-500",
+      gradient: loading ? "from-gray-400 to-gray-500" : error ? "from-red-400 to-red-500" : "from-blue-500 to-cyan-500",
       icon: <Thermometer size={24} />,
     },
     {
       title: "pH Level",
-      value: data ? `${data.ph}` : "--",
+      value: loading ? "Loading..." : error ? "Error" : data ? `${data.ph}` : "--",
       description: `Threshold: ${thresholds.ph.range.min}-${thresholds.ph.range.max}`,
-      gradient: "from-emerald-400 to-teal-400",
+      gradient: loading ? "from-gray-400 to-gray-500" : error ? "from-red-400 to-red-500" : "from-emerald-400 to-teal-400",
       icon: <FlaskConical size={24} />,
     },
     {
       title: "Water Level",
-      value: data ? `${data.water_level}%` : "--%",
+      value: loading ? "Loading..." : error ? "Error" : data ? `${data.water_level}%` : "--%",
       description: `Threshold: ${thresholds.water_level.range.min}-${thresholds.water_level.range.max}%`,
-      gradient: "from-indigo-500 to-blue-500",
+      gradient: loading ? "from-gray-400 to-gray-500" : error ? "from-red-400 to-red-500" : "from-indigo-500 to-blue-500",
       icon: <Waves size={24} />,
     },
   ];
 
   const highlights = [
-    { label: "Temperature", value: data ? `${data.temperature}°C` : "--", color: "bg-blue-50 border-blue-200 text-blue-700" },
-    { label: "pH Level", value: data ? `${data.ph}` : "--", color: "bg-emerald-50 border-emerald-200 text-emerald-700" },
-    { label: "Water Level", value: data ? `${data.water_level}%` : "--", color: "bg-indigo-50 border-indigo-200 text-indigo-700" },
+    { label: "Temperature", value: loading ? "..." : data ? `${data.temperature}°C` : "--", color: "bg-blue-50 border-blue-200 text-blue-700" },
+    { label: "pH Level", value: loading ? "..." : data ? `${data.ph}` : "--", color: "bg-emerald-50 border-emerald-200 text-emerald-700" },
+    { label: "Water Level", value: loading ? "..." : data ? `${data.water_level}%` : "--", color: "bg-indigo-50 border-indigo-200 text-indigo-700" },
   ];
 
-  const recentAlerts = tankStatus.alerts.slice(0, 4);
+  const recentAlerts = tankStatus.alerts.filter(alert => alert !== "Tank is Safe").slice(0, 4);
 
   return (
     <div className="space-y-6">
@@ -128,11 +153,20 @@ export default function HomePage({ onNavigate }: Props) {
 
         <div className="relative grid grid-cols-1 gap-6 p-6 lg:grid-cols-3 lg:p-8">
           <div className="flex flex-col justify-center lg:col-span-2">
-            <div className="flex items-center gap-3 mb-3">
+            <div className="flex items-center gap-3 mb-3 flex-wrap">
               <span className="inline-flex w-fit rounded-full bg-orange-100 px-3 py-1 text-xs font-semibold text-orange-700">
                 Smart Aquaculture Dashboard
               </span>
               {getStatusBadge()}
+              <span className="inline-flex items-center gap-1.5 text-xs text-gray-500">
+                <span className={`w-2 h-2 rounded-full ${getConnectionStatusDot()}`} />
+                {connectionStatus === "connected" ? "Connected" : connectionStatus === "connecting" ? "Connecting..." : "Disconnected"}
+              </span>
+              {lastUpdate && !loading && (
+                <span className="text-xs text-gray-400">
+                  Last updated: {new Date(lastUpdate).toLocaleTimeString()}
+                </span>
+              )}
             </div>
 
             <h1 className="text-3xl font-bold text-gray-900 lg:text-4xl">
@@ -156,29 +190,39 @@ export default function HomePage({ onNavigate }: Props) {
             </div>
           </div>
 
-          <aside className="rounded-3xl border border-gray-200 bg-white/90 p-6 shadow-sm">
-            <h3 className="mb-4 text-xl font-bold text-gray-800">System Alerts and Notifications</h3>
-            {alertsDismissed ? (
-              <p className="text-sm text-gray-400">Alerts dismissed</p>
-            ) : (
-              <div className="flex flex-col gap-2">
-                {tankStatus.alerts.map((alert, index) => (
-                  <div
-                    key={index}
-                    className={`rounded-lg p-3 font-bold text-sm ${
-                      tankStatus.safe ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"
-                    }`}
-                  >
-                    {alert}
-                  </div>
-                ))}
-              </div>
-            )}
-          </aside>
+            <aside className="rounded-3xl border border-gray-200 bg-white/90 p-6 shadow-sm">
+              <h3 className="mb-4 text-xl font-bold text-gray-800">System Alerts and Notifications</h3>
+              {alertsDismissed ? (
+                <p className="text-sm text-gray-400">Alerts dismissed</p>
+              ) : error ? (
+                <div className="rounded-lg p-3 font-bold text-sm bg-red-100 text-red-700">
+                  Failed to load sensor data. Please try refreshing.
+                </div>
+              ) : loading ? (
+                <p className="text-sm text-gray-400">Loading alerts...</p>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {tankStatus.alerts.filter(alert => alert !== "Tank is Safe").length > 0 ? (
+                    tankStatus.alerts.filter(alert => alert !== "Tank is Safe").map((alert, index) => (
+                      <div
+                        key={index}
+                        className="rounded-lg p-3 font-bold text-sm bg-red-100 text-red-700"
+                      >
+                        {alert}
+                      </div>
+                    ))
+                  ) : (
+                    <div className="rounded-lg p-3 font-bold text-sm bg-emerald-100 text-emerald-700">
+                      Tank is Safe
+                    </div>
+                  )}
+                </div>
+              )}
+            </aside>
         </div>
       </section>
 
-      {!tankStatus.safe && hasData && (
+      {!loading && !error && !tankStatus.safe && hasData && (
         <section className="rounded-xl border border-red-200 bg-red-50 p-4">
           <div className="flex items-center gap-2 mb-3">
             <AlertTriangle className="text-red-600" size={18} />
@@ -206,11 +250,16 @@ export default function HomePage({ onNavigate }: Props) {
           <h3 className="mb-4 text-lg font-bold text-gray-800">Quick Controls</h3>
           <div className="flex flex-col gap-3">
             <button
-              onClick={() => refetch()}
-              className="flex items-center gap-2 rounded-lg bg-blue-500 px-4 py-3 text-sm font-semibold text-white transition hover:bg-blue-600"
+              onClick={async () => {
+                setIsRefreshing(true);
+                await refetch();
+                setIsRefreshing(false);
+              }}
+              disabled={isRefreshing || loading}
+              className="flex items-center gap-2 rounded-lg bg-blue-500 px-4 py-3 text-sm font-semibold text-white transition hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <RefreshCw className="h-4 w-4" />
-              Refresh Data
+              <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
+              {isRefreshing ? "Refreshing..." : "Refresh Data"}
             </button>
             <button
               onClick={() => setAlertsDismissed(!alertsDismissed)}

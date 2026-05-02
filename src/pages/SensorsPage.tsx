@@ -28,16 +28,19 @@ function formatTimeAgo(timestamp: string): string {
 }
 
 export default function SensorsPage() {
-  const { data, connectionStatus, settings, settingsLoading, settingsError } = useSensors();
+  const { data, connectionStatus, settings, settingsLoading, settingsError, loading, error } = useSensors();
   
   const thresholds = useMemo(() => getSettingsThresholds(settings), [settings]);
   
   const isOnline = useMemo(() => {
     if (connectionStatus === "online") return true;
+    if (connectionStatus === "connecting") return false;
     if (!data?.timestamp) return false;
     const dataTime = new Date(data.timestamp).getTime();
     return !isNaN(dataTime) && Date.now() - dataTime < 10000;
   }, [data?.timestamp, connectionStatus]);
+
+  const isConnecting = connectionStatus === "connecting";
 
   const sensors = useMemo(() => {
     const sensorKeys = ["temperature", "ph", "water_level"] as const;
@@ -76,12 +79,35 @@ export default function SensorsPage() {
     });
   }, [data, thresholds]);
 
+  if (loading) {
+    return (
+      <div className="bg-white rounded-xl border border-gray-100 p-8 text-center">
+        <Activity size={40} className="mx-auto mb-3 text-gray-400 animate-spin" />
+        <h2 className="mt-0 text-gray-800">Sensors</h2>
+        <p className="text-gray-600">Loading sensor data...</p>
+      </div>
+    );
+  }
+
   if (settingsLoading) {
     return (
       <div className="bg-white rounded-xl border border-gray-100 p-8 text-center">
-        <Activity size={40} className="mx-auto mb-3 text-gray-400" />
+        <Activity size={40} className="mx-auto mb-3 text-gray-400 animate-spin" />
         <h2 className="mt-0 text-gray-800">Sensors</h2>
         <p className="text-gray-600">Loading settings...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="bg-white rounded-xl border border-gray-100 p-8 text-center">
+        <XCircle size={40} className="mx-auto mb-3 text-red-400" />
+        <h2 className="mt-0 text-gray-800">Sensors</h2>
+        <p className="text-red-600">{error}</p>
+        <p className="text-sm text-gray-500 mt-2">
+          Check your connection and try again.
+        </p>
       </div>
     );
   }
@@ -91,10 +117,12 @@ export default function SensorsPage() {
       <div className="bg-white rounded-xl border border-gray-100 p-8 text-center">
         <Activity size={40} className="mx-auto mb-3 text-gray-400" />
         <h2 className="mt-0 text-gray-800">Sensors</h2>
-        <p className="text-gray-600">No sensor data available yet.</p>
-        <p className="text-sm text-gray-500 mt-2">
-          Waiting for ESP32 to send data...
-        </p>
+        <p className="text-gray-600">{settingsError || "No sensor data available yet."}</p>
+        {!data && (
+          <p className="text-sm text-gray-500 mt-2">
+            Waiting for ESP32 to send data...
+          </p>
+        )}
       </div>
     );
   }
@@ -113,54 +141,63 @@ export default function SensorsPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <Radio size={18} className={isOnline ? "text-green-500" : "text-red-500"} />
-            <span className={`font-semibold text-sm ${isOnline ? "text-green-600" : "text-red-600"}`}>
-              {isOnline ? "ONLINE" : "OFFLINE"}
+            <Radio size={18} className={isConnecting ? "text-yellow-500 animate-pulse" : isOnline ? "text-green-500" : "text-red-500"} />
+            <span className={`font-semibold text-sm ${isConnecting ? "text-yellow-600" : isOnline ? "text-green-600" : "text-red-600"}`}>
+              {isConnecting ? "CONNECTING..." : isOnline ? "ONLINE" : "OFFLINE"}
             </span>
           </div>
         </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4">
-        {sensors.map((sensor) => (
-          <div
-            key={sensor.name}
-            className={`rounded-xl border ${sensor.border} ${sensor.bg} p-3 md:p-4`}
-          >
-            <div className="flex items-center justify-between mb-2 md:mb-3">
-              <div className={sensor.color}>
-                {sensor.icon}
+        {loading ? (
+          ["Temperature", "pH Level", "Water Level"].map((name, i) => (
+            <div key={i} className="rounded-xl border border-gray-200 bg-gray-50 p-3 md:p-4">
+              <div className="text-xs font-semibold text-gray-400 uppercase mb-1">Loading...</div>
+              <div className="text-xl md:text-2xl font-bold text-gray-400">--</div>
+            </div>
+          ))
+        ) : (
+          sensors.map((sensor) => (
+            <div
+              key={sensor.name}
+              className={`rounded-xl border ${sensor.border} ${sensor.bg} p-3 md:p-4`}
+            >
+              <div className="flex items-center justify-between mb-2 md:mb-3">
+                <div className={sensor.color}>
+                  {sensor.icon}
+                </div>
+                {sensor.isWarning ? (
+                  <XCircle size={16} className="text-red-500" />
+                ) : (
+                  <CheckCircle size={16} className="text-green-500" />
+                )}
               </div>
-              {sensor.isWarning ? (
-                <XCircle size={16} className="text-red-500" />
-              ) : (
-                <CheckCircle size={16} className="text-green-500" />
+              
+              <div className="text-xs font-semibold text-gray-500 uppercase mb-1">
+                {sensor.name}
+              </div>
+              
+              <div className="text-xl md:text-2xl font-bold text-gray-800">
+                {sensor.value !== null && sensor.value !== undefined ? `${sensor.value}${sensor.unit}` : `--`}
+              </div>
+
+              <div className="mt-2 pt-2 border-t border-gray-200/50 text-xs text-gray-600">
+                <span className="font-medium">Threshold:</span>{" "}
+                {sensor.threshold.isMinOnly 
+                  ? `> ${sensor.threshold.range.min}${sensor.unit}`
+                  : `${sensor.threshold.range.min} - ${sensor.threshold.range.max}${sensor.unit}`
+                }
+              </div>
+
+              {sensor.isWarning && sensor.value !== null && (
+                <div className="mt-2 text-xs font-semibold text-red-600">
+                  {sensor.value < sensor.threshold.range.min ? "Below" : "Above"} threshold!
+                </div>
               )}
             </div>
-            
-            <div className="text-xs font-semibold text-gray-500 uppercase mb-1">
-              {sensor.name}
-            </div>
-            
-            <div className="text-xl md:text-2xl font-bold text-gray-800">
-              {sensor.value !== null && sensor.value !== undefined ? `${sensor.value}${sensor.unit}` : `--`}
-            </div>
-
-            <div className="mt-2 pt-2 border-t border-gray-200/50 text-xs text-gray-600">
-              <span className="font-medium">Threshold:</span>{" "}
-              {sensor.threshold.isMinOnly 
-                ? `> ${sensor.threshold.range.min}${sensor.unit}`
-                : `${sensor.threshold.range.min} - ${sensor.threshold.range.max}${sensor.unit}`
-              }
-            </div>
-
-            {sensor.isWarning && sensor.value !== null && (
-              <div className="mt-2 text-xs font-semibold text-red-600">
-                {sensor.value < sensor.threshold.range.min ? "Below" : "Above"} threshold!
-              </div>
-            )}
-          </div>
-        ))}
+          ))
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

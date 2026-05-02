@@ -50,7 +50,7 @@ export default function AlertsPage() {
   if (logsLoading) {
     return (
       <div className="bg-white rounded-xl border border-gray-100 p-8 text-center">
-        <AlertCircle size={40} className="mx-auto mb-3 text-gray-400" />
+        <AlertCircle size={40} className="mx-auto mb-3 text-gray-400 animate-spin" />
         <p className="text-gray-600">Loading alerts...</p>
       </div>
     );
@@ -60,7 +60,7 @@ export default function AlertsPage() {
     return (
       <div className="bg-white rounded-xl border border-gray-100 p-8 text-center">
         <AlertCircle size={40} className="mx-auto mb-3 text-red-400" />
-        <p className="text-gray-600">Failed to load alerts</p>
+        <p className="text-red-600 font-semibold">Failed to load alerts</p>
         <p className="text-sm text-gray-500 mt-2">{logsError}</p>
       </div>
     );
@@ -80,7 +80,7 @@ export default function AlertsPage() {
             </p>
           </div>
           <div className="text-sm text-gray-500">
-             {logsTotal ?? logs.length} total entries
+            {logsTotal ?? logs.length} total entries
           </div>
         </div>
       </div>
@@ -108,8 +108,7 @@ export default function AlertsPage() {
           <p className="text-gray-600">
             {filter === "all"
               ? "No alerts recorded yet. Alerts appear when sensors go outside thresholds."
-              : `No ${filter.toLowerCase()} alerts found.`
-            }
+              : `No ${filter.toLowerCase()} alerts found.`}
           </p>
         </div>
       ) : (
@@ -146,8 +145,10 @@ export default function AlertsPage() {
                   {log.action === "Alert" ? (
                     <span>
                       <span className="font-medium">{log.parameter}</span> is{" "}
-                      <span className="font-bold">{String(log.old_value)}</span>
-                      {" "}(recorded: <span className="font-bold">{log.new_value}</span>)
+                      <span className="font-bold">{String(log.new_value)}</span>
+                      {log.old_value && (
+                        <span> (recorded: <span className="font-bold">{log.old_value}</span>)</span>
+                      )}
                     </span>
                   ) : (
                     <span>
