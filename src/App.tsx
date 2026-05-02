@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useMemo } from "react";
 import {
   Menu,
   X,
@@ -10,6 +10,8 @@ import {
   Settings,
   FileText,
   ClipboardList,
+  LogOut,
+  Users,
 } from "lucide-react";
 import logo from "./assets/craybitch without background.png";
 import type { MenuKey } from "./types";
@@ -23,12 +25,15 @@ import HistoricalDataPage from "./pages/HistoricalDataPage";
 import SettingsPage from "./pages/SettingsPage";
 import LogsPage from "./pages/LogsPage";
 import ActivityLogsPage from "./pages/ActivityLogsPage";
+import UserManagementPage from "./pages/UserManagementPage";
+import AuthPage from "./pages/AuthPage";
 import { SensorProvider } from "./contexts/SensorProvider";
 import { useActivityLogs } from "./contexts/SensorContext";
+import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { FloatingAlertProvider, FloatingAlertContainer } from "./components/FloatingAlert";
 import { useThresholdAlert } from "./hooks/useThresholdAlert";
 
-const menuItems: { label: MenuKey; icon: React.ReactNode }[] = [
+const baseMenuItems: { label: MenuKey; icon: React.ReactNode }[] = [
   { label: "Home", icon: <Home size={18} /> },
   { label: "Dashboard", icon: <LayoutDashboard size={18} /> },
   { label: "Sensors", icon: <Activity size={18} /> },
@@ -39,6 +44,11 @@ const menuItems: { label: MenuKey; icon: React.ReactNode }[] = [
   { label: "Settings", icon: <Settings size={18} /> },
 ];
 
+const adminMenuItems: { label: MenuKey; icon: React.ReactNode }[] = [
+  ...baseMenuItems,
+  { label: "User Management", icon: <Users size={18} /> },
+];
+
 function getInitialMenuDefault(): MenuKey {
   const saved = localStorage.getItem("activeMenu");
   if (saved && isValidMenuKey(saved)) {
@@ -47,14 +57,19 @@ function getInitialMenuDefault(): MenuKey {
   return "Home";
 }
 
-function AppContent() {
+function DashboardLayout() {
+  const { user, logout } = useAuth();
   const { logActivity } = useActivityLogs();
   const previousMenuRef = useRef<MenuKey>("Home");
   const activeMenuRef = useRef<MenuKey>(getInitialMenuDefault());
-  useThresholdAlert();
-
   const [activeMenu, setActiveMenu] = useState<MenuKey>(getInitialMenuDefault);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  useThresholdAlert();
+
+  const menuItems = useMemo(
+    () => (user?.role === "admin" ? adminMenuItems : baseMenuItems),
+    [user?.role]
+  );
 
   const handleNavigate = useCallback((menu: MenuKey) => {
     const prev = activeMenuRef.current;
@@ -84,10 +99,14 @@ function AppContent() {
         return <LogsPage />;
       case "Settings":
         return <SettingsPage />;
+      case "User Management":
+        return <UserManagementPage />;
       default:
         return <HomePage onNavigate={handleNavigate} />;
     }
   }, [activeMenu, handleNavigate]);
+
+  if (!user) return null;
 
   return (
     <div className="flex min-h-screen bg-gray-100 font-sans">
@@ -138,10 +157,26 @@ function AppContent() {
             );
           })}
         </div>
+
+        <div className="mt-auto w-full px-2 pb-4">
+          <button
+            onClick={() => {
+              logActivity("logout", `${user.name} logged out`, "Auth");
+              logout();
+            }}
+            className="flex flex-col items-center justify-center gap-1 py-2.5 px-1 rounded-lg text-[10px] font-semibold text-center cursor-pointer border-none w-full transition-colors text-red-500 hover:bg-red-50"
+          >
+            <LogOut size={18} />
+            <span className="leading-tight">Logout</span>
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 flex flex-col w-full md:w-auto">
-        <Header />
+        <Header user={user} onLogout={() => {
+          logActivity("logout", `${user.name} logged out`, "Auth");
+          logout();
+        }} />
 
         <div className="p-3 md:p-5">
           <div className="text-xl md:text-2xl font-extrabold text-gray-800 mb-1 mt-10 md:mt-0">
@@ -159,13 +194,25 @@ function AppContent() {
   );
 }
 
+function AppContent() {
+  const { user } = useAuth();
+
+  if (!user) {
+    return <AuthPage />;
+  }
+
+  return <DashboardLayout />;
+}
+
 export default function App() {
   return (
-    <SensorProvider>
-      <FloatingAlertProvider>
-        <AppContent />
-        <FloatingAlertContainer />
-      </FloatingAlertProvider>
-    </SensorProvider>
+    <AuthProvider>
+      <SensorProvider>
+        <FloatingAlertProvider>
+          <AppContent />
+          <FloatingAlertContainer />
+        </FloatingAlertProvider>
+      </SensorProvider>
+    </AuthProvider>
   );
 }

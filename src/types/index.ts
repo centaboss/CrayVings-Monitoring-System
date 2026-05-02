@@ -23,6 +23,7 @@ export const VALID_MENU_KEYS = [
   "Activity Logs",
   "Settings",
   "Logs",
+  "User Management",
 ] as const;
 
 export type MenuKey = typeof VALID_MENU_KEYS[number];
@@ -194,4 +195,20 @@ export interface ActivityLogEntry {
   action_type: ActivityActionType;
   description: string;
   module: string;
+}
+
+export type UserRole = "user" | "admin";
+
+export interface AuthUser {
+  id: number;
+  username: string;
+  email: string;
+  role: UserRole;
+  name: string;
+}
+
+export interface AuthResponse {
+  message: string;
+  user: AuthUser;
+  token: string;
 }
