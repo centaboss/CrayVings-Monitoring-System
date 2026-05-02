@@ -9,6 +9,7 @@ export type SensorEntry = {
 
 export type ChartPoint = {
   name: string;
+  timestamp: string;
   temperature: number;
   water_level: number;
   ph: number;

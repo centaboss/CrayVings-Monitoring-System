@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Thermometer, Waves, FlaskConical, Droplets, AlertTriangle } from "lucide-react";
+import { Thermometer, Waves, FlaskConical, AlertTriangle } from "lucide-react";
 import StatCard from "../components/StatCard";
 import TrendCard from "../components/TrendCard";
 import { useSensors } from "../hooks/useSensors";

@@ -1,10 +1,9 @@
 import { useState, useMemo } from "react";
-import { 
-  History, 
-  Thermometer, 
-  Waves, 
+import {
+  History,
+  Thermometer,
+  Waves,
   FlaskConical,
-  Droplets,
   Filter,
 } from "lucide-react";
 import TrendCard from "../components/TrendCard";
@@ -24,25 +23,27 @@ export default function HistoricalDataPage() {
   ];
 
   const filteredHistory = useMemo(() => {
-    if (timeRange === "all" || history.length === 0) {
+    if (!history || history.length === 0) {
+      return [];
+    }
+
+    if (timeRange === "all") {
       return history;
     }
-    
+
     const hours = timeRange === "1h" ? 1 : timeRange === "6h" ? 6 : 24;
-    const cutoffTime = hours * 60 * 60 * 1000;
-    
-    return history.filter((item) => {
-      const timestamp = new Date(item.name).getTime();
-      return timestamp > Date.now() - cutoffTime || item.name === "--:--";
+    const cutoff = Date.now() - hours * 60 * 60 * 1000;
+
+    const filtered = history.filter((item) => {
+      if (!item.timestamp) return false;
+      const itemTime = new Date(item.timestamp).getTime();
+      return itemTime >= cutoff;
     });
+
+    return filtered;
   }, [history, timeRange]);
 
-  const chartData = useMemo(
-    () => filteredHistory.slice(0, 50),
-    [filteredHistory]
-  );
-
-  const latestReading = chartData[chartData.length - 1];
+  const latestReading = filteredHistory[filteredHistory.length - 1];
 
   if (loading) {
     return (
@@ -63,7 +64,7 @@ export default function HistoricalDataPage() {
     );
   }
 
-  if (!history.length) {
+  if (!history || history.length === 0) {
     return (
       <div className="bg-white rounded-xl border border-gray-100 p-8 text-center">
         <History size={40} className="mx-auto mb-3 text-gray-400" />
@@ -87,7 +88,7 @@ export default function HistoricalDataPage() {
             </p>
           </div>
           <div className="text-sm text-gray-500">
-            {chartData.length} readings
+            {filteredHistory.length} readings
           </div>
         </div>
       </div>
@@ -109,7 +110,7 @@ export default function HistoricalDataPage() {
         ))}
       </div>
 
-      {chartData.length > 0 && (
+      {filteredHistory.length > 0 && (
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
           <div className="bg-white rounded-xl border border-gray-100 p-4">
             <div className="flex items-center gap-2 text-gray-500 mb-1">
@@ -143,23 +144,23 @@ export default function HistoricalDataPage() {
         </div>
       )}
 
-      {chartData.length > 0 ? (
+      {filteredHistory.length > 0 ? (
         <div className="grid grid-cols-2 gap-3">
           <TrendCard
             title="Temperature"
-            data={chartData}
+            data={filteredHistory}
             dataKey="temperature"
             stroke="#f97316"
           />
           <TrendCard
             title="Water Level"
-            data={chartData}
+            data={filteredHistory}
             dataKey="water_level"
             stroke="#2563eb"
           />
           <TrendCard
             title="pH Level"
-            data={chartData}
+            data={filteredHistory}
             dataKey="ph"
             stroke="#6366f1"
           />

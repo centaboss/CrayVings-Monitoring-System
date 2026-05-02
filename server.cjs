@@ -321,8 +321,10 @@ app.post("/sensor", async (req, res) => {
 
 app.get("/sensor", async (req, res) => {
   try {
+    const limit = Math.min(1000, Math.max(1, parseInt(req.query.limit) || 300));
     const result = await pool.query(
-      "SELECT * FROM sensors ORDER BY timestamp DESC LIMIT 50"
+      "SELECT * FROM sensors ORDER BY timestamp DESC LIMIT $1",
+      [limit]
     );
     res.json(result.rows);
   } catch (err) {

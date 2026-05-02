@@ -63,12 +63,13 @@ export async function fetchLatestSensor(signal?: AbortSignal): Promise<SensorEnt
   }
 }
 
-export async function fetchSensorHistory(limit = 50, signal?: AbortSignal): Promise<ChartPoint[]> {
+export async function fetchSensorHistory(limit = 300, signal?: AbortSignal): Promise<ChartPoint[]> {
   const response = await client.get<SensorEntry[]>("/sensor", {
     params: { limit },
     signal,
   });
-  return (response.data || [])
+  
+  const data = (response.data || [])
     .slice()
     .reverse()
     .map((item) => ({
@@ -78,10 +79,18 @@ export async function fetchSensorHistory(limit = 50, signal?: AbortSignal): Prom
             minute: "2-digit",
           })
         : "--:--",
+      timestamp: item.timestamp ? new Date(item.timestamp).toISOString() : "",
       temperature: item.temperature ?? 0,
       water_level: item.water_level ?? 0,
       ph: item.ph ?? 0,
     }));
+  
+  console.log(`[API] Fetched ${data.length} history records:`, {
+    first: data[0]?.timestamp,
+    last: data[data.length - 1]?.timestamp,
+  });
+  
+  return data;
 }
 
 export interface LogsResponse {

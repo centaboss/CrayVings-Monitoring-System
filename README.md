@@ -51,7 +51,7 @@ This can help reduce risks caused by poor water conditions and improve overall m
 - **Dashboard** - Live readings and charts
 - **Sensors** - Individual sensor details
 - **Alerts** - Alert history with filtering (Alert/Change)
-- **Historical Data** - Trend charts over time
+- **Historical Data** - Trend charts with time filtering (1h, 6h, 24h, all time)
 - **Activity Logs** - User activity tracking
 - **Logs** - System event logs with parameter filtering and PDF export
 - **Settings** - Configure thresholds and manage SMS recipients
@@ -188,9 +188,7 @@ wifiMulti.addAP("SSID", "password");
 Navigate to **Settings** in the dashboard to configure:
 - Temperature min/max
 - pH min/max
-- Dissolved oxygen min/max
 - Water level min/max
-- Ammonia min/max
 
 ### Alert Customization
 
@@ -209,21 +207,21 @@ Navigate to **Settings** in the dashboard to configure:
 
 ## API Endpoints
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Server health check |
-| `/sensor` | POST | Submit sensor data |
-| `/sensor/latest` | GET | Get latest reading |
-| `/sensor` | GET | Get history |
-| `/settings` | GET | Get thresholds |
-| `/settings` | POST | Update thresholds |
-| `/settings/recipients` | GET | Get SMS recipients |
-| `/settings/recipients` | POST | Add new recipient |
-| `/settings/recipients/:id` | PUT | Update recipient |
-| `/settings/recipients/:id` | DELETE | Delete recipient |
-| `/settings/recipients/test/:id` | POST | Send test SMS |
-| `/system-logs` | GET | Get system logs |
-| `/activity-logs` | GET | Get activity logs |
+| Endpoint | Method | Description | Query Params |
+|----------|--------|-------------|--------------|
+| `/health` | GET | Server health check | - |
+| `/sensor` | POST | Submit sensor data | - |
+| `/sensor/latest` | GET | Get latest reading | - |
+| `/sensor` | GET | Get history | `limit` (1-1000, default: 300) |
+| `/settings` | GET | Get thresholds | - |
+| `/settings` | POST | Update thresholds | - |
+| `/settings/recipients` | GET | Get SMS recipients | - |
+| `/settings/recipients` | POST | Add new recipient | - |
+| `/settings/recipients/:id` | PUT | Update recipient | - |
+| `/settings/recipients/:id` | DELETE | Delete recipient | - |
+| `/settings/recipients/test/:id` | POST | Send test SMS | - |
+| `/system-logs` | GET | Get system logs | `page`, `limit` |
+| `/activity-logs` | GET | Get activity logs | `page`, `limit`, `search`, `sortBy`, `actionType` |
 
 ---
 
