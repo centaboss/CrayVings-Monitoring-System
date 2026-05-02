@@ -48,7 +48,7 @@ export default function HomePage({ onNavigate }: Props) {
       const value = data[key];
       const status = getThresholdStatus(value, threshold.range, threshold.isMinOnly);
       
-      if (status === "warning") {
+      if (status === "warning" || status === "critical") {
         const direction = value < threshold.range.min ? "low" : "high";
         alerts.push(`${threshold.name} ${direction} at ${value}${threshold.unit}`);
       }
@@ -195,7 +195,7 @@ export default function HomePage({ onNavigate }: Props) {
         </section>
       )}
 
-      <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
         {stats.map((stat) => (
           <StatCard key={stat.title} {...stat} />
         ))}
@@ -231,7 +231,7 @@ export default function HomePage({ onNavigate }: Props) {
 
         <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm lg:col-span-3">
           <h3 className="mb-4 text-lg font-bold text-gray-800">Key Metrics Summary</h3>
-          <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+          <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
             <div className="rounded-xl bg-blue-50 p-4">
               <p className="text-xs text-gray-500">Temperature</p>
               <p className="mt-1 text-2xl font-bold text-blue-600">{data?.temperature ?? "--"}°C</p>
