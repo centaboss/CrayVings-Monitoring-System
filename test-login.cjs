@@ -1,45 +1,39 @@
-const http = require("http");
+const axios = require("axios");
+require("dotenv").config();
 
 const API_BASE = process.env.API_BASE || "http://localhost:3000";
+const USERNAME = process.env.TEST_USERNAME || "admin";
+const PASSWORD = process.env.TEST_PASSWORD || "Admin@123";
 
-function testLogin(username, password) {
-  const data = JSON.stringify({ username, password });
+async function testLogin() {
+  console.log("Testing login endpoint...");
+  console.log(`API: ${API_BASE}/auth/login`);
+  console.log(`Username: ${USERNAME}\n`);
 
-  const options = {
-    hostname: new URL(API_BASE).hostname,
-    port: new URL(API_BASE).port,
-    path: "/auth/login",
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Content-Length": Buffer.byteLength(data),
-    },
-  };
-
-  const req = http.request(options, (res) => {
-    let body = "";
-    res.on("data", (chunk) => (body += chunk));
-    res.on("end", () => {
-      const response = JSON.parse(body);
-      if (res.statusCode === 200) {
-        console.log(`✅ Login successful!`);
-        console.log(`   User: ${response.user.name} (${response.user.role})`);
-        console.log(`   Token: ${response.token.substring(0, 16)}...`);
-      } else {
-        console.log(`❌ Login failed (HTTP ${res.statusCode})`);
-        console.log(`   Error: ${response.message}`);
-      }
+  try {
+    const response = await axios.post(`${API_BASE}/auth/login`, {
+      username: USERNAME,
+      password: PASSWORD,
     });
-  });
 
-  req.on("error", (err) => {
-    console.log(`❌ Connection failed: ${err.message}`);
-    console.log(`   Make sure the server is running on ${API_BASE}`);
-  });
-
-  req.write(data);
-  req.end();
+    console.log("✅ Login successful!\n");
+    console.log("Response:");
+    console.log(`  Message: ${response.data.message}`);
+    console.log(`  Token: ${response.data.token.substring(0, 20)}...`);
+    console.log(`  User: ${response.data.user.name} (${response.data.user.role})`);
+    console.log(`  Username: ${response.data.user.username}`);
+    console.log(`  Email: ${response.data.user.email}`);
+  } catch (err) {
+    console.log("❌ Login failed!\n");
+    if (err.response) {
+      console.log(`Status: ${err.response.status}`);
+      console.log(`Error: ${JSON.stringify(err.response.data)}`);
+    } else if (err.code === "ECONNREFUSED") {
+      console.log("Error: Cannot connect to server. Make sure server is running on port 3000.");
+    } else {
+      console.log(`Error: ${err.message}`);
+    }
+  }
 }
 
-console.log("Testing admin login...\n");
-testLogin("admin", "Admin@123");
+testLogin();

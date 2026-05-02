@@ -23,7 +23,7 @@ export default function DashboardPage() {
       const value = data[key];
       const status = getThresholdStatus(value, threshold.range, threshold.isMinOnly);
       
-      if (status === "warning") {
+      if (status === "warning" || status === "critical") {
         const direction = value < threshold.range.min ? "below" : "above";
         messages.push(`${threshold.name} ${direction} threshold`);
       }
@@ -40,19 +40,19 @@ export default function DashboardPage() {
       <div className="grid grid-cols-2 md:grid-cols-3 gap-2 md:gap-3 mb-4">
         <StatCard
           title="Temperature"
-          value={`${data?.temperature ?? 0}°C`}
+          value={`${data?.temperature ?? "--"}°C`}
           color="#f97316"
           icon={<Thermometer size={18} />}
         />
         <StatCard
           title="Water Level"
-          value={`${data?.water_level ?? 0}%`}
+          value={`${data?.water_level ?? "--"}%`}
           color="#2563eb"
           icon={<Waves size={18} />}
         />
         <StatCard
           title="pH Level"
-          value={`${data?.ph ?? 0}`}
+          value={`${data?.ph ?? "--"}`}
           color="#6366f1"
           icon={<FlaskConical size={18} />}
         />

@@ -143,7 +143,7 @@ export default function SensorsPage() {
             </div>
             
             <div className="text-xl md:text-2xl font-bold text-gray-800">
-              {sensor.value ?? "--"}{sensor.unit}
+              {sensor.value !== null && sensor.value !== undefined ? `${sensor.value}${sensor.unit}` : `--`}
             </div>
 
             <div className="mt-2 pt-2 border-t border-gray-200/50 text-xs text-gray-600">

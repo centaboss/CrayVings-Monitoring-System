@@ -39,7 +39,7 @@ async function sendSingleSMS(phoneNumber, message) {
       }
       const response = await axios.post(
         `${SKYSMS_API_URL}/sms/send`,
-        { phone_number: phoneNumber, message, from: "CRAYVINGS WATER MONITORING SYSTEM" },
+        { phone_number: phoneNumber, message, from: "CRAYVINGS" },
         {
           headers: {
             "X-API-Key": SKYSMS_API_KEY,
@@ -56,7 +56,7 @@ async function sendSingleSMS(phoneNumber, message) {
         await logSMS(phoneNumber, message, "failed", error.message, null);
         return;
       }
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise(resolve => setTimeout(resolve, 2000 * Math.pow(2, attempt)));
     }
   }
 }
@@ -78,7 +78,7 @@ async function sendBulkSMS(phoneNumbers, message) {
         {
           recipients: phoneNumbers.map((phone) => ({ phone_number: phone })),
           message,
-          from: "CRAYVINGS WATER MONITORING SYSTEM"
+          from: "CRAYVINGS"
         },
         {
           headers: {
@@ -100,7 +100,7 @@ async function sendBulkSMS(phoneNumbers, message) {
         }
         return;
       }
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise(resolve => setTimeout(resolve, 2000 * Math.pow(2, attempt)));
     }
   }
 }
@@ -117,11 +117,8 @@ async function logSMS(phone, message, status, error, smsId = null) {
   }
 }
 
-const lastAlertedState = {
-  Temperature: { status: null, value: null, timestamp: null },
-  "pH Level": { status: null, value: null, timestamp: null },
-  "Water Level": { status: null, value: null, timestamp: null },
-};
+// In-memory last alert state (loaded from DB on startup)
+let lastAlertedState = {};
 
 app.use(express.json());
 
@@ -229,7 +226,7 @@ app.post("/sensor", async (req, res) => {
 
     console.log(`[${new Date().toISOString()}] Sensor data saved:`, insertResult.rows[0]);
 
-  const settingsResult = await pool.query("SELECT * FROM sensor_settings LIMIT 1");
+    const settingsResult = await pool.query("SELECT * FROM sensor_settings LIMIT 1");
     const settings = settingsResult.rows[0] || {
       temp_min: 20.0, temp_max: 31.0,
       ph_min: 6.5, ph_max: 8.5,
@@ -256,6 +253,10 @@ app.post("/sensor", async (req, res) => {
       const lastTs = last.timestamp ? new Date(last.timestamp).getTime() : 0;
 
       if (status === "good") {
+        await pool.query(
+          `UPDATE last_alerts SET status = $1, value = $2, timestamp = $3 WHERE sensor_key = $4`,
+          ["good", sensor.val, now.toISOString(), sensor.key]
+        );
         lastAlertedState[sensor.key] = { status: "good", value: sensor.val, timestamp: now.toISOString() };
         continue;
       }
@@ -271,6 +272,13 @@ app.post("/sensor", async (req, res) => {
         `INSERT INTO system_logs (action, parameter, old_value, new_value) VALUES ($1, $2, $3, $4)`,
         ["Alert", sensor.key, direction, sensor.val]
       );
+
+      // Update last_alerts table
+      await pool.query(
+        `INSERT INTO last_alerts (sensor_key, status, value, timestamp) VALUES ($1, $2, $3, $4)
+         ON CONFLICT (sensor_key) DO UPDATE SET status = $2, value = $3, timestamp = $4`,
+        [sensor.key, status, sensor.val, now.toISOString()]
+      );
       lastAlertedState[sensor.key] = { status, value: sensor.val, timestamp: now.toISOString() };
       console.log(`[${now.toISOString()}] Alert logged: ${sensor.key} ${direction} (value: ${sensor.val}, status: ${status})`);
 
@@ -278,7 +286,7 @@ app.post("/sensor", async (req, res) => {
       if (status === "critical") {
         try {
           const recipientsResult = await pool.query(
-            "SELECT phone_number FROM authorized_recipients WHERE is_active = true"
+            "SELECT phone_number, name FROM authorized_recipients WHERE is_active = true"
           );
           if (recipientsResult.rows.length === 0) {
             console.warn(`[${now.toISOString()}] No active recipients for SMS alert`);
@@ -296,10 +304,28 @@ app.post("/sensor", async (req, res) => {
           };
           const unit = unitMap[sensor.key] || "";
           const emoji = emojiMap[sensor.key] || "⚠️";
-          const message = `${emoji} ${sensor.key.toUpperCase()} ALERT: ${sensor.val}${unit} (${direction === "Low" ? "min" : "max"}: ${direction === "Low" ? sensor.min : sensor.max}${unit})`;
-          
+
+          const timestamp = now.toLocaleString('en-PH', {
+            timeZone: 'Asia/Manila',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: true
+          });
+
           const phoneNumbers = recipientsResult.rows.map(row => row.phone_number);
-          await sendBulkSMS(phoneNumbers, message);
+
+          for (const recipient of recipientsResult.rows) {
+            const recipientName = recipient.name || 'User';
+            const message = `${emoji} ${sensor.key.toUpperCase()} ALERT\n` +
+              `Recipient: ${recipientName}\n` +
+              `Reading: ${sensor.val}${unit}\n` +
+              `Threshold: ${direction === "Low" ? sensor.min : sensor.max}${unit}\n` +
+              `Time: ${timestamp}`;
+
+            await sendSingleSMS(recipient.phone_number, message);
+          }
         } catch (smsErr) {
           console.error(`[${now.toISOString()}] SMS alert failed:`, smsErr.message);
         }
@@ -459,7 +485,7 @@ app.post("/settings", async (req, res) => {
         `UPDATE sensor_settings SET 
           temp_min = $1, temp_max = $2, ph_min = $3, ph_max = $4,
           water_level_min = $5, water_level_max = $6
-        WHERE id = $7 RETURNING *`,
+         WHERE id = $7 RETURNING *`,
         [temp_min, temp_max, ph_min, ph_max, water_level_min, water_level_max, existing.rows[0].id]
       );
     } else {
@@ -826,6 +852,33 @@ app.post("/settings/recipients/test/:id", async (req, res) => {
   }
 });
 
+// SMS logs endpoint
+app.get("/settings/sms-logs", async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
+    const offset = (page - 1) * limit;
+
+    const result = await pool.query(
+      "SELECT * FROM sms_logs ORDER BY sent_at DESC LIMIT $1 OFFSET $2",
+      [limit, offset]
+    );
+
+    const countResult = await pool.query("SELECT COUNT(*) FROM sms_logs");
+    const total = parseInt(countResult.rows[0].count);
+
+    res.json({
+      data: result.rows,
+      total,
+      page,
+      totalPages: Math.ceil(total / limit)
+    });
+  } catch (err) {
+    console.error(`[${new Date().toISOString()}] Error fetching SMS logs:`, err);
+    res.status(500).json({ error: "Failed to fetch SMS logs" });
+  }
+});
+
 async function startServer() {
   try {
     const client = await pool.connect();
@@ -942,6 +995,29 @@ async function startServer() {
         )
       `);
       console.log(`[${new Date().toISOString()}] sms_logs table ready`);
+
+      // New: last_alerts table for persistent rate limiting
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS last_alerts (
+          sensor_key VARCHAR(50) PRIMARY KEY,
+          status VARCHAR(20),
+          value DECIMAL(5,2),
+          timestamp TIMESTAMP
+        )
+      `);
+      console.log(`[${new Date().toISOString()}] last_alerts table ready`);
+
+      // Load last alert state from database
+      const lastAlertsResult = await client.query("SELECT * FROM last_alerts");
+      lastAlertedState = {};
+      for (const row of lastAlertsResult.rows) {
+        lastAlertedState[row.sensor_key] = {
+          status: row.status,
+          value: parseFloat(row.value),
+          timestamp: row.timestamp?.toISOString()
+        };
+      }
+      console.log(`[${new Date().toISOString()}] Loaded ${lastAlertsResult.rows.length} alert states from DB`);
 
       await client.query(`
         CREATE INDEX IF NOT EXISTS idx_activity_logs_timestamp ON activity_logs(timestamp DESC)
