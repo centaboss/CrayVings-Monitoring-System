@@ -9,10 +9,105 @@ require("dotenv").config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+const pool = new Pool({
+  host: process.env.PG_HOST,
+  port: parseInt(process.env.PG_PORT),
+  database: process.env.PG_DATABASE,
+  user: process.env.PG_USER,
+  password: process.env.PG_PASSWORD,
+});
+
+app.use(cors());
+app.use(express.json());
+
+// =============================================================================
+// Password hashing
+// =============================================================================
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto.pbkdf2Sync(password, salt, 10000, 64, "sha512").toString("hex");
+  return `${salt}:${hash}`;
+}
+
+function verifyPassword(password, stored) {
+  const [salt, hash] = stored.split(":");
+  const verifyHash = crypto.pbkdf2Sync(password, salt, 10000, 64, "sha512").toString("hex");
+  return hash === verifyHash;
+}
+
+function generateToken() {
+  return crypto.randomBytes(32).toString("hex");
+}
+
+// =============================================================================
+// Auth middleware
+// =============================================================================
+function requireAdmin(req, res, next) {
+  const token = req.headers.authorization?.replace("Bearer ", "");
+  if (!token) return res.status(401).json({ message: "Authentication required" });
+
+  pool.query("SELECT * FROM users WHERE token = $1", [token])
+    .then(result => {
+      if (result.rows.length === 0) return res.status(403).json({ message: "Invalid token" });
+      const user = result.rows[0];
+      if (user.role !== "admin") return res.status(403).json({ message: "Admin access required" });
+      req.adminUser = user;
+      next();
+    })
+    .catch(err => res.status(500).json({ message: "Auth error", error: err.message }));
+}
+
+function requireAuth(req, res, next) {
+  const token = req.headers.authorization?.replace("Bearer ", "");
+  if (!token) return res.status(401).json({ message: "Authentication required" });
+
+  pool.query("SELECT * FROM users WHERE token = $1", [token])
+    .then(result => {
+      if (result.rows.length === 0) return res.status(403).json({ message: "Invalid token" });
+      req.user = result.rows[0];
+      next();
+    })
+    .catch(err => res.status(500).json({ message: "Auth error", error: err.message }));
+}
+
+// =============================================================================
+// Helper: detect changed fields
+// =============================================================================
+function getChangedFields(current, updates) {
+  const changes = {};
+  for (const key of Object.keys(updates)) {
+    if (String(current[key] ?? "") !== String(updates[key] ?? "")) {
+      changes[key] = updates[key];
+    }
+  }
+  return changes;
+}
+
+// =============================================================================
+// Helper: update only if fields actually changed
+// =============================================================================
+async function updateOnlyIfChanged(client, { table, keyColumn, keyValue, currentRow, updates, touchUpdatedAt }) {
+  const changes = getChangedFields(currentRow, updates);
+  if (Object.keys(changes).length === 0) {
+    return { changed: false, row: currentRow };
+  }
+  if (touchUpdatedAt) changes.updated_at = new Date();
+  const keys = Object.keys(changes);
+  const values = Object.values(changes);
+  const setClauses = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
+  const result = await client.query(
+    `UPDATE ${table} SET ${setClauses} WHERE ${keyColumn} = $${keys.length + 1} RETURNING *`,
+    [...values, keyValue]
+  );
+  return { changed: true, row: result.rows[0] };
+}
+
+// =============================================================================
+// Threshold status
+// =============================================================================
 function getThresholdStatus(value, min, max) {
   const rangeSize = max - min;
   const criticalMargin = rangeSize * 0.15;
-
   if (value < min) {
     const deviation = min - value;
     return deviation >= criticalMargin ? "critical" : "warning";
@@ -25,157 +120,73 @@ function getThresholdStatus(value, min, max) {
 }
 
 // =============================================================================
-// SkySMS API Configuration & Helpers
+// SMS helpers
 // =============================================================================
 const SKYSMS_API_KEY = process.env.SKYSMS_API_KEY;
 const SKYSMS_API_URL = process.env.SKYSMS_API_URL || "https://skysms.skyio.site/api/v1";
 
-// =============================================================================
-// SMS CONFIGURATION - Easy to customize all SMS messages and settings
-// =============================================================================
 const SMS_CONFIG = {
-  // Message templates - Use {{PLACEHOLDER}} for dynamic values
   messages: {
-    // Warning alert message (sent when value is slightly out of range)
-    warning: "⚠️ {{SENSOR}} WARNING\n" +
-             "Recipient: {{NAME}}\n" +
-             "Reading: {{VALUE}}{{UNIT}}\n" +
-             "Threshold: {{THRESHOLD}}{{UNIT}}\n" +
-             "Time: {{TIME}}\n" +
-             "Status: Warning - Please check soon",
-
-    // Critical alert message (sent when value is 15%+ outside range)
-    critical: "🚨 {{SENSOR}} CRITICAL ALERT\n" +
-              "Recipient: {{NAME}}\n" +
-              "Reading: {{VALUE}}{{UNIT}}\n" +
-              "Threshold: {{THRESHOLD}}{{UNIT}}\n" +
-              "Time: {{TIME}}\n" +
-              "Status: CRITICAL - Immediate action required!",
-
-    // Hourly status update message (sent every hour regardless of alerts)
-    hourlyUpdate: "📊 CRAYVINGS HOURLY UPDATE\n" +
-                  "Time: {{TIME}}\n" +
-                  "Temperature: {{TEMP}}°C ({{TEMP_STATUS}})\n" +
-                  "pH Level: {{PH}} ({{PH_STATUS}})\n" +
-                  "Water Level: {{WATER}}% ({{WATER_STATUS}})\n" +
-                  "{{SUMMARY}}"
+    warning: "⚠️ {{SENSOR}} WARNING\nRecipient: {{NAME}}\nReading: {{VALUE}}{{UNIT}}\nThreshold: {{THRESHOLD}}{{UNIT}}\nTime: {{TIME}}\nStatus: Warning",
+    critical: "🚨 {{SENSOR}} CRITICAL ALERT\nRecipient: {{NAME}}\nReading: {{VALUE}}{{UNIT}}\nThreshold: {{THRESHOLD}}{{UNIT}}\nTime: {{TIME}}\nStatus: CRITICAL",
+    hourlyUpdate: "📊 CRAYVINGS HOURLY UPDATE\nTime: {{TIME}}\nTemperature: {{TEMP}}°C ({{TEMP_STATUS}})\npH Level: {{PH}} ({{PH_STATUS}})\nWater Level: {{WATER}}% ({{WATER_STATUS}})\n{{SUMMARY}}"
   },
-
-  // Sensor display names (what appears in SMS messages)
-  sensorNames: {
-    "Temperature": "TEMPERATURE",
-    "pH Level": "PH LEVEL",
-    "Water Level": "WATER LEVEL"
-  },
-
-  // Units for each sensor type
-  units: {
-    "Temperature": "°C",
-    "pH Level": "pH",
-    "Water Level": "%"
-  },
-
-  // Hourly update settings
+  sensorNames: { "Temperature": "TEMPERATURE", "pH Level": "PH LEVEL", "Water Level": "WATER LEVEL" },
+  units: { "Temperature": "°C", "pH Level": "pH", "Water Level": "%" },
   hourly: {
-    // Set to 'false' in .env (HOURLY_SMS_ENABLED=false) to disable
-    enabled: process.env.HOURLY_SMS_ENABLED !== 'false',
-    // How often to send hourly updates (default: 1 hour = 3600000 ms)
-    intervalMs: process.env.HOURLY_SMS_INTERVAL_MS
-      ? parseInt(process.env.HOURLY_SMS_INTERVAL_MS)
-      : 60 * 60 * 1000
+    enabled: process.env.HOURLY_SMS_ENABLED !== "false",
+    intervalMs: parseInt(process.env.HOURLY_SMS_INTERVAL_MS) || 3600000
   },
-
-  // Cooldown between repeated alerts (milliseconds)
   cooldown: {
-    warning: process.env.WARNING_SMS_COOLDOWN_MS
-      ? parseInt(process.env.WARNING_SMS_COOLDOWN_MS)
-      : 60 * 60 * 1000,  // 1 hour between warning SMS
-    critical: process.env.SMS_COOLDOWN_MS
-      ? parseInt(process.env.SMS_COOLDOWN_MS)
-      : 5 * 60 * 1000      // 5 minutes between critical SMS
+    warning: parseInt(process.env.WARNING_SMS_COOLDOWN_MS) || 3600000,
+    critical: parseInt(process.env.SMS_COOLDOWN_MS) || 300000
   },
-
-  // Retry settings for failed SMS
-  retry: {
-    maxRetries: 2,           // Up to 2 retries (3 total attempts)
-    baseDelayMs: 2000         // Base delay: 2s, 4s, 8s (exponential backoff)
-  },
-
-  // SMS sender name
+  retry: { maxRetries: 2, baseDelayMs: 2000 },
   from: "CRAYVINGS"
 };
 
-// Helper: Replace {{PLACEHOLDER}} in message templates with actual values
 function buildMessage(template, data) {
   let message = template;
   for (const [key, value] of Object.entries(data)) {
-    message = message.replace(new RegExp(`{{${key}}}`, 'g'), String(value));
+    message = message.replace(new RegExp(`{{${key}}}`, "g"), String(value));
   }
   return message;
 }
 
-// Helper: Convert status to human-readable text with emoji
 function getStatusText(status) {
   switch (status) {
-    case 'good': return ' Good';
-    case 'warning': return ' Warning';
-    case 'critical': return ' Critical';
-    default: return 'Unknown';
+    case "good": return "✅ Good";
+    case "warning": return "⚠️ Warning";
+    case "critical": return "🚨 Critical";
+    default: return "Unknown";
   }
 }
 
-// =============================================================================
-// Improved SMS Sending with Better Reliability
-// =============================================================================
 async function sendSingleSMS(phoneNumber, message) {
   const { maxRetries, baseDelayMs } = SMS_CONFIG.retry;
-
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      // Check if SkySMS is configured
       if (!SKYSMS_API_KEY || !SKYSMS_API_URL) {
         console.error("SkySMS configuration missing in .env");
         await logSMS(phoneNumber, message, "failed", "Missing SkySMS config", null);
         return false;
       }
-
       const response = await axios.post(
         `${SKYSMS_API_URL}/sms/send`,
-        {
-          phone_number: phoneNumber,
-          message,
-          from: SMS_CONFIG.from
-        },
-        {
-          headers: {
-            "X-API-Key": SKYSMS_API_KEY,
-            "Content-Type": "application/json",
-          },
-          timeout: 10000 // 10 second timeout per request
-        }
+        { phone_number: phoneNumber, message, from: SMS_CONFIG.from },
+        { headers: { "X-API-Key": SKYSMS_API_KEY, "Content-Type": "application/json" }, timeout: 10000 }
       );
-
       console.log(`✅ SMS sent to ${phoneNumber} (attempt ${attempt + 1})`);
       await logSMS(phoneNumber, message, "sent", null, response.data?.id);
       return true;
-
     } catch (error) {
-      const isLastAttempt = attempt === maxRetries;
       const errorMessage = error.response?.data?.message || error.message;
-
-      console.error(
-        `❌ Failed to send SMS to ${phoneNumber} (attempt ${attempt + 1}/${maxRetries + 1}):`,
-        errorMessage
-      );
-
-      if (isLastAttempt) {
+      console.error(`❌ Failed to send SMS to ${phoneNumber} (attempt ${attempt + 1}/${maxRetries + 1}): ${errorMessage}`);
+      if (attempt === maxRetries) {
         await logSMS(phoneNumber, message, "failed", errorMessage, null);
         return false;
       }
-
-      // Exponential backoff: 2s, 4s, 8s...
-      const delay = baseDelayMs * Math.pow(2, attempt);
-      await new Promise(resolve => setTimeout(resolve, delay));
+      await new Promise(resolve => setTimeout(resolve, baseDelayMs * Math.pow(2, attempt)));
     }
   }
   return false;
@@ -184,8 +195,7 @@ async function sendSingleSMS(phoneNumber, message) {
 async function logSMS(phone, message, status, error, smsId = null) {
   try {
     await pool.query(
-      `INSERT INTO sms_logs (recipient_phone, message, status, error_message, sms_id, sent_at)
-       VALUES ($1, $2, $3, $4, $5, NOW())`,
+      `INSERT INTO sms_logs (recipient_phone, message, status, error_message, sms_id, sent_at) VALUES ($1, $2, $3, $4, $5, NOW())`,
       [phone, message, status, error || null, smsId || null]
     );
   } catch (logErr) {
@@ -193,817 +203,137 @@ async function logSMS(phone, message, status, error, smsId = null) {
   }
 }
 
-// In-memory last alert state (loaded from DB on startup)
 let lastAlertedState = {};
 
-app.use(express.json());
+// =============================================================================
+// ROUTES
+// =============================================================================
 
-const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "http://localhost:5173,http://localhost:5174,http://localhost:3001,http://192.168.1.20:3000").split(",");
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      if (!origin || ALLOWED_ORIGINS.includes(origin) || origin.startsWith("http://localhost:") || origin.match(/^http:\/\/\d+\.\d+\.\d+\.\d+:/)) {
-        callback(null, true);
-      } else {
-        console.log("CORS blocked origin:", origin);
-        callback(new Error("Not allowed by CORS"));
-      }
-    },
-    methods: ["GET", "POST", "PUT", "DELETE"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
-
-if (!process.env.PG_PASSWORD) {
-  console.error("Error: PG_PASSWORD environment variable is required");
-  process.exit(1);
-}
-
-const pool = new Pool({
-  host: process.env.PG_HOST || "localhost",
-  port: process.env.PG_PORT || 5432,
-  database: process.env.PG_DATABASE || "crayvings_monitoring_system_db",
-  user: process.env.PG_USER || "postgres",
-  password: process.env.PG_PASSWORD,
-  max: 20,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
+// Health check
+app.get("/health", (req, res) => {
+  res.json({ status: "ok", serverTime: new Date().toISOString() });
 });
 
-function isPlainObject(value) {
-  return Object.prototype.toString.call(value) === "[object Object]";
-}
-
-function stableStringify(value) {
-  if (Array.isArray(value)) {
-    return `[${value.map(stableStringify).join(",")}]`;
-  }
-  if (isPlainObject(value)) {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
-
-function isNumericLike(value) {
-  return (
-    (typeof value === "number" && Number.isFinite(value)) ||
-    (typeof value === "string" && value.trim() !== "" && /^-?\d+(\.\d+)?$/.test(value.trim()))
-  );
-}
-
-function normalizeComparableValue(value) {
-  if (value === undefined || value === null) return null;
-  if (value instanceof Date) return value.toISOString();
-  if (isNumericLike(value)) return Number(value);
-  if (typeof value === "string") return value.trim();
-  if (isPlainObject(value) || Array.isArray(value)) return stableStringify(value);
-  return value;
-}
-
-function areValuesEqual(currentValue, newValue) {
-  const current = normalizeComparableValue(currentValue);
-  const next = normalizeComparableValue(newValue);
-
-  if (current === null || next === null) {
-    return current === next;
-  }
-  return Object.is(current, next);
-}
-
-function getChangedFields(currentRow, updates) {
-  const changed = {};
-
-  for (const [field, newValue] of Object.entries(updates)) {
-    const currentValue = currentRow ? currentRow[field] : undefined;
-    // Explicitly compare normalized values so null/undefined, numeric strings,
-    // Dates, arrays, and JSON-like objects do not create false database writes.
-    if (!areValuesEqual(currentValue, newValue)) {
-      changed[field] = newValue;
-    }
-  }
-
-  return changed;
-}
-
-function assertSafeIdentifier(identifier) {
-  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(identifier)) {
-    throw new Error(`Unsafe SQL identifier: ${identifier}`);
-  }
-}
-
-async function updateOnlyIfChanged(db, options) {
-  const {
-    table,
-    keyColumn,
-    keyValue,
-    currentRow,
-    updates,
-    touchUpdatedAt = false,
-    returning = "*",
-  } = options;
-  const changed = getChangedFields(currentRow, updates);
-  const changedFields = Object.keys(changed);
-
-  if (changedFields.length === 0) {
-    return { changed: false, row: currentRow, changedFields };
-  }
-
-  [table, keyColumn, ...changedFields].forEach(assertSafeIdentifier);
-  const setClauses = changedFields.map((field, index) => `${field} = $${index + 1}`);
-  if (touchUpdatedAt) {
-    setClauses.push("updated_at = NOW()");
-  }
-
-  const values = changedFields.map((field) => changed[field]);
-  values.push(keyValue);
-
-  const result = await db.query(
-    `UPDATE ${table} SET ${setClauses.join(", ")} WHERE ${keyColumn} = $${values.length} RETURNING ${returning}`,
-    values
-  );
-
-  return { changed: true, row: result.rows[0], changedFields };
-}
-
+// Root
 app.get("/", (req, res) => {
-  res.json({
-    message: "Server running",
-    routes: ["/", "/health", "/sensor", "/sensor/latest", "/logs", "/logs (POST)"],
-  });
+  res.json({ message: "CRAYvings Monitoring System API", status: "running" });
 });
 
-const sensorSchema = z.object({
-  device_id: z.string().min(1).max(50),
-  temperature: z.coerce.number().min(-10).max(50),
-  water_level: z.coerce.number().min(0).max(100),
-  ph: z.coerce.number().min(0).max(14),
-  timestamp: z.string().datetime().optional(),
-});
-
-const settingsSchema = z.object({
-  temp_min: z.coerce.number().min(-10).max(50),
-  temp_max: z.coerce.number().min(-10).max(50),
-  ph_min: z.coerce.number().min(0).max(14),
-  ph_max: z.coerce.number().min(0).max(14),
-  water_level_min: z.coerce.number().min(0).max(100),
-  water_level_max: z.coerce.number().min(0).max(100),
-}).refine((value) => value.temp_min < value.temp_max, {
-  message: "Temperature minimum must be lower than maximum",
-  path: ["temp_min"],
-}).refine((value) => value.ph_min < value.ph_max, {
-  message: "pH minimum must be lower than maximum",
-  path: ["ph_min"],
-}).refine((value) => value.water_level_min < value.water_level_max, {
-  message: "Water level minimum must be lower than maximum",
-  path: ["water_level_min"],
-});
-
-const recipientUpdateSchema = z.object({
-  name: z.string().min(1).max(100).optional(),
-  is_active: z.preprocess((value) => {
-    if (typeof value === "string") {
-      if (value.toLowerCase() === "true") return true;
-      if (value.toLowerCase() === "false") return false;
-    }
-    return value;
-  }, z.boolean().optional()),
-}).refine((value) => value.name !== undefined || value.is_active !== undefined, {
-  message: "At least one field is required",
-});
-
-app.get("/health", async (req, res) => {
-  try {
-    const result = await pool.query("SELECT COUNT(*) FROM sensors");
-    res.json({
-      status: "ok",
-      database: "connected",
-      documents: parseInt(result.rows[0].count),
-      serverTime: new Date().toISOString(),
-    });
-  } catch (err) {
-    res.status(500).json({
-      status: "error",
-      message: "Health check failed",
-      error: err.message,
-    });
-  }
-});
-
+// POST /sensor (ESP32)
 app.post("/sensor", async (req, res) => {
   try {
-    console.log(`[${new Date().toISOString()}] /sensor POST received:`, JSON.stringify(req.body));
-    
-    if (!req.body || Object.keys(req.body).length === 0) {
-      return res.status(400).json({ message: "Empty request body" });
-    }
+    const { device_id, temperature, water_level, ph } = req.body;
+    if (!device_id) return res.status(400).json({ message: "device_id is required" });
 
-    const result = sensorSchema.safeParse(req.body);
-    
-    if (!result.success) {
-      return res.status(400).json({
-        message: "Validation error",
-        errors: result.error.flatten().fieldErrors,
-      });
-    }
+    const ts = new Date();
+    const result = await pool.query(
+      `INSERT INTO sensors (device_id, temperature, water_level, ph, timestamp) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [device_id, Number(temperature ?? 0), Number(water_level ?? 0), Number(ph ?? 0), ts]
+    );
+    console.log(`[${new Date().toISOString()}] Sensor data saved from ${device_id}`);
 
-    const {
-      device_id,
-      temperature,
-      water_level,
-      ph,
-      timestamp,
-    } = result.data;
-
-    const lastReading = await pool.query(
-       "SELECT * FROM sensors ORDER BY timestamp DESC LIMIT 1"
-     );
-     const lastData = lastReading.rows[0] || null;
-
-     const ts = timestamp ? new Date(timestamp) : new Date();
-     const incomingSensor = {
-       device_id,
-       temperature: Number(temperature ?? 0),
-       water_level: Number(water_level ?? 0),
-       ph: Number(ph ?? 0),
-       timestamp: ts,
-     };
-
-     const sensorChanges = getChangedFields(lastData || {}, {
-       device_id: incomingSensor.device_id,
-       temperature: incomingSensor.temperature,
-       water_level: incomingSensor.water_level,
-       ph: incomingSensor.ph,
-     });
-
-     let savedSensor = lastData;
-     if (!lastData || Object.keys(sensorChanges).length > 0) {
-       const insertResult = await pool.query(
-         `INSERT INTO sensors (device_id, temperature, water_level, ph, timestamp)
-          VALUES ($1, $2, $3, $4, $5)
-          RETURNING *`,
-         [
-           incomingSensor.device_id,
-           incomingSensor.temperature,
-           incomingSensor.water_level,
-           incomingSensor.ph,
-           incomingSensor.timestamp,
-         ]
-       );
-       savedSensor = insertResult.rows[0];
-       console.log(`[${new Date().toISOString()}] Sensor data saved:`, savedSensor);
-     } else {
-       console.log(`[${new Date().toISOString()}] No sensor change detected; skipping database insert`);
-     }
-
-     const settingsResult = await pool.query("SELECT * FROM sensor_settings LIMIT 1");
-     const settings = settingsResult.rows[0] || {
-       temp_min: 20.0, temp_max: 31.0,
-       ph_min: 6.5, ph_max: 8.5,
-       water_level_min: 10.0, water_level_max: 100.0,
-     };
-
-    const now = new Date();
-    const nowTs = now.getTime();
-
-    // Get the latest sensor reading for hourly update (use saved data or fetch)
-    let latestSensorResult = savedSensor || lastData;
-    if (!latestSensorResult) {
-      try {
-        const queryResult = await pool.query(
-          "SELECT * FROM sensors ORDER BY timestamp DESC, id DESC LIMIT 1"
-        );
-        latestSensorResult = queryResult.rows[0] || { temperature: 0, ph: 0, water_level: 0 };
-      } catch (dbErr) {
-        console.error(`[${new Date().toISOString()}] Error fetching latest sensor:`, dbErr.message);
-        latestSensorResult = { temperature: 0, ph: 0, water_level: 0 };
-      }
-    }
-
-    // Check if it's time for hourly update
-    const hourlyEnabled = SMS_CONFIG.hourly.enabled;
-    if (hourlyEnabled && !global.lastHourlyUpdateTs) {
-      global.lastHourlyUpdateTs = 0; // Initialize on first run
-    }
-    const shouldSendHourly = hourlyEnabled &&
-      (!global.lastHourlyUpdateTs || nowTs - global.lastHourlyUpdateTs >= SMS_CONFIG.hourly.intervalMs);
+    // Check thresholds and send alerts
+    const settingsResult = await pool.query("SELECT * FROM sensor_settings LIMIT 1");
+    const settings = settingsResult.rows[0] || { temp_min: 20, temp_max: 31, ph_min: 6.5, ph_max: 8.5, water_level_min: 10, water_level_max: 100 };
 
     const sensorChecks = [
-      { key: "Temperature", val: Number(temperature), min: settings.temp_min, max: settings.temp_max },
-      { key: "pH Level", val: Number(ph), min: settings.ph_min, max: settings.ph_max },
-      { key: "Water Level", val: Number(water_level), min: settings.water_level_min, max: settings.water_level_max },
+      { key: "Temperature", val: Number(temperature), min: Number(settings.temp_min), max: Number(settings.temp_max) },
+      { key: "pH Level", val: Number(ph), min: Number(settings.ph_min), max: Number(settings.ph_max) },
+      { key: "Water Level", val: Number(water_level), min: Number(settings.water_level_min), max: Number(settings.water_level_max) },
     ];
 
-    // Track which sensors triggered alerts in this cycle (to avoid duplicate SMS)
-    const alertedThisCycle = new Set();
+    const nowTs = ts.getTime();
+    const hourlyEnabled = SMS_CONFIG.hourly.enabled;
+    if (hourlyEnabled && !global.lastHourlyUpdateTs) global.lastHourlyUpdateTs = nowTs;
 
     for (const sensor of sensorChecks) {
       if (sensor.val === 0 && sensor.key !== "Water Level") continue;
-
       const status = getThresholdStatus(sensor.val, sensor.min, sensor.max);
       const last = lastAlertedState[sensor.key] || {};
       const lastTs = last.timestamp ? new Date(last.timestamp).getTime() : 0;
 
       if (status === "good") {
-        const alertUpdates = { status: "good", value: sensor.val };
-        const alertChanges = getChangedFields(last, alertUpdates);
-        if (Object.keys(alertChanges).length > 0) {
+        if (last.status && last.status !== "good") {
           await pool.query(
-            `INSERT INTO last_alerts (sensor_key, status, value, timestamp) VALUES ($1, $2, $3, $4)
-             ON CONFLICT (sensor_key) DO UPDATE SET status = $2, value = $3, timestamp = $4`,
-            [sensor.key, alertUpdates.status, alertUpdates.value, now.toISOString()]
+            `INSERT INTO last_alerts (sensor_key, status, value, timestamp) VALUES ($1, $2, $3, $4) ON CONFLICT (sensor_key) DO UPDATE SET status = $2, value = $3, timestamp = $4`,
+            [sensor.key, "good", sensor.val, ts.toISOString()]
           );
-          lastAlertedState[sensor.key] = { ...alertUpdates, timestamp: now.toISOString() };
-        } else {
-          lastAlertedState[sensor.key] = { ...last, ...alertUpdates };
+          lastAlertedState[sensor.key] = { status: "good", value: sensor.val, timestamp: ts.toISOString() };
         }
         continue;
       }
 
-      // Use appropriate cooldown based on alert severity
-      const interval = status === "critical"
-        ? SMS_CONFIG.cooldown.critical
-        : SMS_CONFIG.cooldown.warning;
-
-      // Skip if same status and still in cooldown period
-      if (status === last.status && nowTs - lastTs < interval) {
-        continue;
-      }
+      const interval = status === "critical" ? SMS_CONFIG.cooldown.critical : SMS_CONFIG.cooldown.warning;
+      if (status === last.status && nowTs - lastTs < interval) continue;
 
       const direction = sensor.val < sensor.min ? "Low" : "High";
+      await pool.query(`INSERT INTO system_logs (action, parameter, old_value, new_value) VALUES ($1, $2, $3, $4)`,
+        ["Alert", sensor.key, direction, sensor.val]);
+
       await pool.query(
-        `INSERT INTO system_logs (action, parameter, old_value, new_value) VALUES ($1, $2, $3, $4)`,
-        ["Alert", sensor.key, direction, sensor.val]
+        `INSERT INTO last_alerts (sensor_key, status, value, timestamp) VALUES ($1, $2, $3, $4) ON CONFLICT (sensor_key) DO UPDATE SET status = $2, value = $3, timestamp = $4`,
+        [sensor.key, status, sensor.val, ts.toISOString()]
       );
+      lastAlertedState[sensor.key] = { status, value: sensor.val, timestamp: ts.toISOString() };
 
-      // Update last_alerts table only after an alert event is actually emitted.
-      await pool.query(
-        `INSERT INTO last_alerts (sensor_key, status, value, timestamp) VALUES ($1, $2, $3, $4)
-         ON CONFLICT (sensor_key) DO UPDATE SET status = $2, value = $3, timestamp = $4`,
-        [sensor.key, status, sensor.val, now.toISOString()]
-      );
-      lastAlertedState[sensor.key] = { status, value: sensor.val, timestamp: now.toISOString() };
-      console.log(`[${now.toISOString()}] Alert logged: ${sensor.key} ${direction} (value: ${sensor.val}, status: ${status})`);
-
-      // Send SMS for BOTH warning AND critical alerts
-      if (status === "warning" || status === "critical") {
-        // Avoid duplicate SMS in the same sensor processing cycle
-        if (alertedThisCycle.has(sensor.key)) continue;
-
-        try {
-          const recipientsResult = await pool.query(
-            "SELECT phone_number, name FROM authorized_recipients WHERE is_active = true"
-          );
-          if (recipientsResult.rows.length === 0) {
-            console.warn(`[${now.toISOString()}] No active recipients for SMS alert`);
-            continue;
-          }
-
-          // Format timestamp for Philippines timezone
-          const timestamp = now.toLocaleString('en-PH', {
-            timeZone: 'Asia/Manila',
-            month: '2-digit',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit',
-            hour12: true
+      const recipients = await pool.query("SELECT phone_number, name FROM authorized_recipients WHERE is_active = true");
+      if (recipients.rows.length > 0) {
+        const isCritical = status === "critical";
+        const template = isCritical ? SMS_CONFIG.messages.critical : SMS_CONFIG.messages.warning;
+        const timestamp = ts.toLocaleString("en-PH", { timeZone: "Asia/Manila", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: true });
+        for (const r of recipients.rows) {
+          const message = buildMessage(template, {
+            SENSOR: SMS_CONFIG.sensorNames[sensor.key] || sensor.key,
+            NAME: r.name || "User", VALUE: sensor.val, UNIT: SMS_CONFIG.units[sensor.key] || "",
+            THRESHOLD: direction === "Low" ? sensor.min : sensor.max, TIME: timestamp
           });
-
-          // Get the appropriate message template and emoji based on status
-          const isCritical = status === "critical";
-          const messageTemplate = isCritical
-            ? SMS_CONFIG.messages.critical
-            : SMS_CONFIG.messages.warning;
-          const emoji = isCritical ? "🚨" : "⚠️";
-          const sensorDisplayName = SMS_CONFIG.sensorNames[sensor.key] || sensor.key.toUpperCase();
-          const unit = SMS_CONFIG.units[sensor.key] || "";
-
-          // Send SMS to each active recipient
-          for (const recipient of recipientsResult.rows) {
-            const recipientName = recipient.name || 'User';
-            const thresholdValue = direction === "Low" ? sensor.min : sensor.max;
-
-            // Build message using template
-            const message = buildMessage(messageTemplate, {
-              'SENSOR': sensorDisplayName,
-              'NAME': recipientName,
-              'VALUE': sensor.val,
-              'UNIT': unit,
-              'THRESHOLD': thresholdValue,
-              'TIME': timestamp
-            });
-
-            await sendSingleSMS(recipient.phone_number, message);
-          }
-
-          alertedThisCycle.add(sensor.key);
-          console.log(`[${now.toISOString()}] ${status.toUpperCase()} SMS sent for ${sensor.key} to ${recipientsResult.rows.length} recipients`);
-
-        } catch (smsErr) {
-          console.error(`[${now.toISOString()}] SMS alert failed:`, smsErr.message);
+          await sendSingleSMS(r.phone_number, message);
         }
       }
     }
 
-    // Send hourly update if enabled and time has elapsed
-    if (shouldSendHourly) {
-      try {
-        const recipientsResult = await pool.query(
-          "SELECT phone_number, name FROM authorized_recipients WHERE is_active = true"
-        );
-        if (recipientsResult.rows.length > 0) {
-          // Determine status for each sensor
-          const tempStatus = getThresholdStatus(
-            latestSensorResult?.temperature ?? 0,
-            settings.temp_min,
-            settings.temp_max
-          );
-          const phStatus = getThresholdStatus(
-            latestSensorResult?.ph ?? 0,
-            settings.ph_min,
-            settings.ph_max
-          );
-          const waterStatus = getThresholdStatus(
-            latestSensorResult?.water_level ?? 0,
-            settings.water_level_min,
-            settings.water_level_max
-          );
-
-          const summary = (tempStatus === 'good' && phStatus === 'good' && waterStatus === 'good')
-            ? "All systems normal ✅"
-            : "Some parameters need attention ⚠️";
-
-          const timestamp = now.toLocaleString('en-PH', {
-            timeZone: 'Asia/Manila',
-            month: '2-digit',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit',
-            hour12: true
-          });
-
-          for (const recipient of recipientsResult.rows) {
-            const message = buildMessage(SMS_CONFIG.messages.hourlyUpdate, {
-              'TIME': timestamp,
-              'TEMP': latestSensorResult?.temperature ?? 'N/A',
-              'TEMP_STATUS': getStatusText(tempStatus),
-              'PH': latestSensorResult?.ph ?? 'N/A',
-              'PH_STATUS': getStatusText(phStatus),
-              'WATER': latestSensorResult?.water_level ?? 'N/A',
-              'WATER_STATUS': getStatusText(waterStatus),
-              'SUMMARY': summary
-            });
-
-            await sendSingleSMS(recipient.phone_number, message);
-          }
-
-          global.lastHourlyUpdateTs = nowTs;
-          console.log(`[${now.toISOString()}] Hourly status update SMS sent to ${recipientsResult.rows.length} recipients`);
-        }
-      } catch (hourlyErr) {
-        console.error(`[${now.toISOString()}] Hourly SMS update failed:`, hourlyErr.message);
-      }
-    }
-
-    res.status(201).json({
-       message: Object.keys(sensorChanges).length > 0 || !lastData ? "Saved to database" : "No sensor change detected",
-       saved: Object.keys(sensorChanges).length > 0 || !lastData,
-       data: savedSensor || lastData || incomingSensor,
-     });
+    res.status(201).json({ message: "Saved", data: result.rows[0] });
   } catch (err) {
     console.error(`[${new Date().toISOString()}] Error saving sensor:`, err.message);
-    console.error(`[${new Date().toISOString()}] Stack trace:`, err.stack);
-    res.status(500).json({
-      message: "Error saving data",
-      error: err.message,
-      details: process.env.NODE_ENV === 'development' ? err.stack : undefined
-    });
+    res.status(500).json({ message: "Error saving data", error: err.message });
   }
 });
 
+// GET /sensor (history)
 app.get("/sensor", async (req, res) => {
   try {
     const limit = Math.min(1000, Math.max(1, parseInt(req.query.limit) || 300));
-    const result = await pool.query(
-      "SELECT * FROM sensors ORDER BY timestamp DESC LIMIT $1",
-      [limit]
-    );
+    const result = await pool.query("SELECT * FROM sensors ORDER BY timestamp DESC LIMIT $1", [limit]);
     res.json(result.rows);
   } catch (err) {
-    console.error(`[${new Date().toISOString()}] Error fetching sensors:`, err);
-    res.status(500).json({
-      message: "Error fetching data",
-      error: err.message,
-    });
+    console.error(`[${new Date().toISOString()}] Error fetching sensors:`, err.message);
+    res.status(500).json({ message: "Error fetching data", error: err.message });
   }
 });
 
+// GET /sensor/latest
 app.get("/sensor/latest", async (req, res) => {
   try {
-    const result = await pool.query(
-      "SELECT * FROM sensors ORDER BY timestamp DESC LIMIT 1"
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({
-        message: "No sensor data found",
-      });
-    }
-
-    console.log(`[${new Date().toISOString()}] Latest data sent:`, result.rows[0]);
+    const result = await pool.query("SELECT * FROM sensors ORDER BY timestamp DESC LIMIT 1");
+    if (result.rows.length === 0) return res.status(404).json({ message: "No sensor data found" });
     res.json(result.rows[0]);
   } catch (err) {
-    console.error(`[${new Date().toISOString()}] Error fetching latest sensor data:`, err);
-    res.status(500).json({
-      message: "Error fetching latest data",
-      error: err.message,
-    });
+    console.error(`[${new Date().toISOString()}] Error fetching latest:`, err.message);
+    res.status(500).json({ message: "Error", error: err.message });
   }
 });
 
-app.post("/logs", async (req, res) => {
-  try {
-    const { action, parameter, old_value, new_value } = req.body;
-
-    if (!action || !parameter) {
-      return res.status(400).json({
-        message: "action and parameter are required",
-      });
-    }
-
-    const result = await pool.query(
-      `INSERT INTO system_logs (action, parameter, old_value, new_value)
-       VALUES ($1, $2, $3, $4)
-       RETURNING *`,
-      [action, parameter, String(old_value ?? ""), String(new_value ?? "")]
-    );
-
-    console.log(`[${new Date().toISOString()}] Log created:`, result.rows[0]);
-
-    res.status(201).json({
-      message: "Log created",
-      data: result.rows[0],
-    });
-  } catch (err) {
-    console.error(`[${new Date().toISOString()}] Error creating log:`, err);
-    res.status(500).json({
-      message: "Error creating log",
-      error: err.message,
-    });
-  }
-});
-
-app.get("/system-logs", async (req, res) => {
-  try {
-    const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
-    const offset = (page - 1) * limit;
-    
-    console.log(`[${new Date().toISOString()}] ✓ /system-logs endpoint hit (page ${page}, limit ${limit})`);
-    
-    const countResult = await pool.query("SELECT COUNT(*) FROM system_logs");
-    const total = parseInt(countResult.rows[0].count);
-    
-    const result = await pool.query(
-      "SELECT * FROM system_logs ORDER BY timestamp DESC LIMIT $1 OFFSET $2",
-      [limit, offset]
-    );
-    
-    console.log(`[${new Date().toISOString()}] Logs found: ${result.rows.length} (total: ${total})`);
-    res.json({ data: result.rows, total });
-  } catch (err) {
-    console.error(`[${new Date().toISOString()}] Error fetching logs:`, err);
-    res.status(500).json({
-      message: "Error fetching logs",
-      error: err.message,
-    });
-  }
-});
-
-app.get("/settings", async (req, res) => {
-  try {
-    const result = await pool.query("SELECT * FROM sensor_settings LIMIT 1");
-    if (result.rows.length === 0) {
-      const defaultSettings = {
-        temp_min: 20.0,
-        temp_max: 31.0,
-        ph_min: 6.5,
-        ph_max: 8.5,
-        water_level_min: 10.0,
-        water_level_max: 100.0,
-      };
-      return res.json(defaultSettings);
-    }
-    const dbSettings = result.rows[0];
-    res.json(dbSettings);
-  } catch (err) {
-    console.error(`[${new Date().toISOString()}] Error fetching settings:`, err);
-    res.status(500).json({ message: "Error fetching settings" });
-  }
-});
-
-app.post("/settings", requireAdmin, async (req, res) => {
-  try {
-    const parsed = settingsSchema.safeParse(req.body);
-    if (!parsed.success) {
-      return res.status(400).json({
-        message: "Validation error",
-        errors: parsed.error.flatten().fieldErrors,
-      });
-    }
-
-    const updates = parsed.data;
-    
-    const existing = await pool.query("SELECT * FROM sensor_settings LIMIT 1");
-    
-    let savedSettings;
-    let changed = true;
-    if (existing.rows.length > 0) {
-      const updateResult = await updateOnlyIfChanged(pool, {
-        table: "sensor_settings",
-        keyColumn: "id",
-        keyValue: existing.rows[0].id,
-        currentRow: existing.rows[0],
-        updates,
-        touchUpdatedAt: true,
-      });
-
-      if (updateResult.changed) {
-        savedSettings = updateResult.row;
-        console.log(`[${new Date().toISOString()}] Settings saved:`, savedSettings);
-      } else {
-        changed = false;
-        savedSettings = existing.rows[0];
-        console.log(`[${new Date().toISOString()}] No settings change detected; skipping database update`);
-      }
-    } else {
-      const result = await pool.query(
-        `INSERT INTO sensor_settings (temp_min, temp_max, ph_min, ph_max, water_level_min, water_level_max)
-          VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-        [
-          updates.temp_min,
-          updates.temp_max,
-          updates.ph_min,
-          updates.ph_max,
-          updates.water_level_min,
-          updates.water_level_max,
-        ]
-      );
-      savedSettings = result.rows[0];
-      console.log(`[${new Date().toISOString()}] Settings saved:`, savedSettings);
-    }
-
-    res.json({
-      message: changed ? "Settings saved" : "No settings change detected",
-      changed,
-      data: savedSettings,
-    });
-  } catch (err) {
-    console.error(`[${new Date().toISOString()}] Error saving settings:`, err);
-    res.status(500).json({ message: "Error saving settings" });
-  }
-});
-
-app.post("/activity-logs", async (req, res) => {
-  try {
-    const { user_name, action_type, description, module } = req.body;
-    
-    if (!action_type) {
-      return res.status(400).json({ message: "action_type is required" });
-    }
-    
-    const result = await pool.query(
-      `INSERT INTO activity_logs (user_name, action_type, description, module)
-       VALUES ($1, $2, $3, $4) RETURNING *`,
-      [user_name || "Admin", action_type, description || "", module || ""]
-    );
-    
-    res.status(201).json({ message: "Activity logged", data: result.rows[0] });
-  } catch (err) {
-    console.error(`[${new Date().toISOString()}] Error logging activity:`, err);
-    res.status(500).json({ message: "Error logging activity" });
-  }
-});
-
-app.get("/activity-logs", async (req, res) => {
-  try {
-    const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
-    const offset = (page - 1) * limit;
-    const search = (req.query.search || "").trim();
-    const sortBy = req.query.sortBy === "oldest" ? "ASC" : "DESC";
-    const actionFilter = req.query.actionType;
-    
-    let whereClause = "";
-    const params = [];
-    let paramIndex = 1;
-    
-    if (search) {
-      whereClause = `WHERE (description ILIKE $${paramIndex} OR user_name ILIKE $${paramIndex} OR action_type ILIKE $${paramIndex} OR module ILIKE $${paramIndex})`;
-      params.push(`%${search}%`);
-      paramIndex++;
-    }
-    
-    if (actionFilter) {
-      whereClause += whereClause ? " AND" : "WHERE";
-      whereClause += ` action_type = $${paramIndex}`;
-      params.push(actionFilter);
-      paramIndex++;
-    }
-    
-    const countQuery = `SELECT COUNT(*) FROM activity_logs ${whereClause}`;
-    const countResult = await pool.query(countQuery, params);
-    const total = parseInt(countResult.rows[0].count);
-    
-    const dataQuery = `SELECT * FROM activity_logs ${whereClause} ORDER BY timestamp ${sortBy} LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
-    const result = await pool.query(dataQuery, [...params, limit, offset]);
-    
-    res.json({
-      data: result.rows,
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit)
-    });
-  } catch (err) {
-    console.error(`[${new Date().toISOString()}] Error fetching activity logs:`, err);
-    res.status(500).json({ message: "Error fetching activity logs" });
-  }
-});
-
-function hashPassword(password) {
-  const salt = crypto.randomBytes(16).toString("hex");
-  const hash = crypto.pbkdf2Sync(password, salt, 10000, 64, "sha512").toString("hex");
-  return `${salt}:${hash}`;
-}
-
-function verifyPassword(password, storedHash) {
-  const [salt, hash] = storedHash.split(":");
-  const verifyHash = crypto.pbkdf2Sync(password, salt, 10000, 64, "sha512").toString("hex");
-  return hash === verifyHash;
-}
-
-function generateToken() {
-  return crypto.randomBytes(32).toString("hex");
-}
-
-function requireAdmin(req, res, next) {
-  const token = req.headers.authorization?.replace("Bearer ", "");
-  if (!token) {
-    return res.status(401).json({ message: "Authentication required" });
-  }
-  pool.query("SELECT id, name, username, email, role FROM users WHERE token = $1", [token])
-    .then((result) => {
-      if (result.rows.length === 0) {
-        return res.status(401).json({ message: "Invalid or expired session" });
-      }
-      const user = result.rows[0];
-      if (user.role !== "admin") {
-        return res.status(403).json({ message: "Admin access required" });
-      }
-      req.adminUser = user;
-      next();
-    })
-    .catch((err) => {
-      console.error(`[${new Date().toISOString()}] Auth middleware error:`, err.message);
-      res.status(500).json({ message: "Server error" });
-    });
-}
-
-const loginSchema = z.object({
-  username: z.string().min(1),
-  password: z.string().min(1),
-});
-
-const createUserSchema = z.object({
-  name: z.string().min(2).max(100),
-  username: z.string().min(3).max(50).regex(/^[a-zA-Z0-9_]+$/, "Username can only contain letters, numbers, and underscores"),
-  email: z.string().email("Invalid email address"),
-  password: z.string().min(8, "Password must be at least 8 characters").max(100),
-  role: z.enum(["user", "admin"]),
-});
-
+// POST /auth/login
 app.post("/auth/login", async (req, res) => {
   try {
-    const result = loginSchema.safeParse(req.body);
-    if (!result.success) {
-      return res.status(400).json({ message: "Invalid username or password" });
-    }
+    const { username, password } = req.body;
+    if (!username || !password) return res.status(400).json({ message: "Username and password required" });
 
-    const { username, password } = result.data;
+    const result = await pool.query("SELECT * FROM users WHERE username = $1", [username]);
+    if (result.rows.length === 0) return res.status(401).json({ message: "Invalid credentials" });
 
-    const userResult = await pool.query(
-      "SELECT id, name, username, email, role, password_hash FROM users WHERE username = $1",
-      [username]
-    );
-
-    if (userResult.rows.length === 0) {
-      return res.status(401).json({ message: "Invalid username or password" });
-    }
-
-    const user = userResult.rows[0];
-    if (!verifyPassword(password, user.password_hash)) {
-      return res.status(401).json({ message: "Invalid username or password" });
-    }
+    const user = result.rows[0];
+    if (!verifyPassword(password, user.password_hash)) return res.status(401).json({ message: "Invalid credentials" });
 
     const token = generateToken();
     await pool.query("UPDATE users SET token = $1 WHERE id = $2", [token, user.id]);
@@ -1011,475 +341,326 @@ app.post("/auth/login", async (req, res) => {
     res.json({
       message: "Login successful",
       user: { id: user.id, username: user.username, email: user.email, role: user.role, name: user.name },
-      token,
+      token
     });
   } catch (err) {
-    console.error(`[${new Date().toISOString()}] Error logging in:`, err.message);
-    res.status(500).json({ message: "Login failed" });
+    console.error(`[${new Date().toISOString()}] Login error:`, err.message);
+    res.status(500).json({ message: "Login failed", error: err.message });
   }
 });
 
+// GET /auth/users
 app.get("/auth/users", requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
-      "SELECT id, name, username, email, role, created_at FROM users ORDER BY created_at DESC"
-    );
+    const result = await pool.query("SELECT id, name, username, email, role, created_at FROM users ORDER BY created_at DESC");
     res.json(result.rows);
   } catch (err) {
-    console.error(`[${new Date().toISOString()}] Error fetching users:`, err.message);
-    res.status(500).json({ message: "Failed to fetch users" });
+    res.status(500).json({ message: "Error fetching users", error: err.message });
   }
 });
 
+// POST /auth/users
 app.post("/auth/users", requireAdmin, async (req, res) => {
   try {
-    const result = createUserSchema.safeParse(req.body);
-    if (!result.success) {
-      return res.status(400).json({ message: "Validation error", errors: result.error.flatten().fieldErrors });
-    }
-
-    const { name, username, email, password, role } = result.data;
-
-    const existingUser = await pool.query("SELECT id FROM users WHERE username = $1 OR email = $2", [username, email]);
-    if (existingUser.rows.length > 0) {
-      return res.status(409).json({ message: "Username or email already exists" });
-    }
+    const { name, username, email, password, role } = req.body;
+    if (!name || !username || !email || !password) return res.status(400).json({ message: "All fields required" });
 
     const passwordHash = hashPassword(password);
-
-    const insertResult = await pool.query(
-      `INSERT INTO users (name, username, email, password_hash, role, created_at)
-       VALUES ($1, $2, $3, $4, $5, NOW()) RETURNING id, name, username, email, role, created_at`,
-      [name, username, email, passwordHash, role]
+    const result = await pool.query(
+      `INSERT INTO users (name, username, email, password_hash, role) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, username, email, role, created_at`,
+      [name, username, email, passwordHash, role || "user"]
     );
-
-    const user = insertResult.rows[0];
-    console.log(`[${new Date().toISOString()}] User created: ${user.username} (${user.role}) by admin ${req.adminUser.username}`);
-
-    res.status(201).json({
-      message: "User created successfully",
-      data: user,
-    });
+    res.status(201).json({ message: "User created", data: result.rows[0] });
   } catch (err) {
-    console.error(`[${new Date().toISOString()}] Error creating user:`, err.message);
-    res.status(500).json({ message: "Failed to create user" });
+    if (err.code === "23505") return res.status(409).json({ message: "Username or email already exists" });
+    res.status(500).json({ message: "Error creating user", error: err.message });
   }
 });
 
-app.put("/auth/users/:id/password", requireAdmin, async (req, res) => {
-  try {
-    const userId = parseInt(req.params.id);
-    const { newPassword } = req.body;
-
-    if (!Number.isInteger(userId)) {
-      return res.status(400).json({ message: "Invalid user id" });
-    }
-
-    if (!newPassword || newPassword.length < 8) {
-      return res.status(400).json({ message: "Password must be at least 8 characters" });
-    }
-
-    const existingUser = await pool.query("SELECT id, password_hash FROM users WHERE id = $1", [userId]);
-    if (existingUser.rows.length === 0) {
-      return res.status(404).json({ message: "User not found" });
-    }
-
-    if (verifyPassword(newPassword, existingUser.rows[0].password_hash)) {
-      console.log(`[${new Date().toISOString()}] No password change detected for user ID ${userId}; skipping database update`);
-      return res.json({ message: "No password change detected", changed: false });
-    }
-
-    const passwordHash = hashPassword(newPassword);
-    await pool.query("UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2", [passwordHash, userId]);
-
-    console.log(`[${new Date().toISOString()}] Password reset for user ID ${userId} by admin ${req.adminUser.username}`);
-
-    res.json({ message: "Password reset successfully", changed: true });
-  } catch (err) {
-    console.error(`[${new Date().toISOString()}] Error resetting password:`, err.message);
-    res.status(500).json({ message: "Failed to reset password" });
-  }
-});
-
+// DELETE /auth/users/:id
 app.delete("/auth/users/:id", requireAdmin, async (req, res) => {
   try {
-    const userId = parseInt(req.params.id);
-
-    if (req.adminUser.id === userId) {
-      return res.status(400).json({ message: "Cannot delete your own account" });
-    }
-
-    const result = await pool.query("DELETE FROM users WHERE id = $1 RETURNING username", [userId]);
-    if (result.rows.length === 0) {
-      return res.status(404).json({ message: "User not found" });
-    }
-
-    console.log(`[${new Date().toISOString()}] User deleted: ${result.rows[0].username} by admin ${req.adminUser.username}`);
-
-    res.json({ message: "User deleted successfully" });
+    const result = await pool.query("DELETE FROM users WHERE id = $1 RETURNING username", [req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ message: "User not found" });
+    res.json({ message: "User deleted" });
   } catch (err) {
-    console.error(`[${new Date().toISOString()}] Error deleting user:`, err.message);
-    res.status(500).json({ message: "Failed to delete user" });
+    res.status(500).json({ message: "Error deleting user", error: err.message });
   }
 });
 
-// Recipient management endpoints
+// PUT /auth/users/:id/password
+app.put("/auth/users/:id/password", requireAdmin, async (req, res) => {
+  try {
+    const { newPassword } = req.body;
+    if (!newPassword) return res.status(400).json({ message: "New password required" });
+    const passwordHash = hashPassword(newPassword);
+    await pool.query("UPDATE users SET password_hash = $1 WHERE id = $2", [passwordHash, req.params.id]);
+    res.json({ message: "Password updated" });
+  } catch (err) {
+    res.status(500).json({ message: "Error updating password", error: err.message });
+  }
+});
+
+// GET /settings
+app.get("/settings", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM sensor_settings LIMIT 1");
+    if (result.rows.length === 0) {
+      return res.json({ temp_min: 20, temp_max: 31, ph_min: 6.5, ph_max: 8.5, water_level_min: 10, water_level_max: 100 });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ message: "Error fetching settings", error: err.message });
+  }
+});
+
+// POST /settings
+app.post("/settings", requireAdmin, async (req, res) => {
+  try {
+    const { temp_min, temp_max, ph_min, ph_max, water_level_min, water_level_max } = req.body;
+    const existing = await pool.query("SELECT * FROM sensor_settings LIMIT 1");
+    let savedSettings;
+    if (existing.rows.length > 0) {
+      const changes = getChangedFields(existing.rows[0], { temp_min, temp_max, ph_min, ph_max, water_level_min, water_level_max });
+      if (Object.keys(changes).length === 0) return res.json({ message: "No change", changed: false, data: existing.rows[0] });
+      const keys = Object.keys(changes);
+      const values = Object.values(changes);
+      const setClauses = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
+      const result = await pool.query(`UPDATE sensor_settings SET ${setClauses}, updated_at = NOW() WHERE id = $${keys.length + 1} RETURNING *`, [...values, existing.rows[0].id]);
+      savedSettings = result.rows[0];
+    } else {
+      const result = await pool.query(
+        `INSERT INTO sensor_settings (temp_min, temp_max, ph_min, ph_max, water_level_min, water_level_max) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+        [temp_min, temp_max, ph_min, ph_max, water_level_min, water_level_max]
+      );
+      savedSettings = result.rows[0];
+    }
+    res.json({ message: "Settings saved", changed: true, data: savedSettings });
+  } catch (err) {
+    res.status(500).json({ message: "Error saving settings", error: err.message });
+  }
+});
+
+// POST /settings/reset
+app.post("/settings/reset", requireAdmin, async (req, res) => {
+  try {
+    const defaults = { temp_min: 20, temp_max: 31, ph_min: 6.5, ph_max: 8.5, water_level_min: 10, water_level_max: 100 };
+    const existing = await pool.query("SELECT * FROM sensor_settings LIMIT 1");
+    let savedSettings;
+    if (existing.rows.length > 0) {
+      const result = await pool.query(
+        `UPDATE sensor_settings SET temp_min=$1, temp_max=$2, ph_min=$3, ph_max=$4, water_level_min=$5, water_level_max=$6, updated_at=NOW() WHERE id=$7 RETURNING *`,
+        [defaults.temp_min, defaults.temp_max, defaults.ph_min, defaults.ph_max, defaults.water_level_min, defaults.water_level_max, existing.rows[0].id]
+      );
+      savedSettings = result.rows[0];
+    } else {
+      const result = await pool.query(
+        `INSERT INTO sensor_settings (temp_min, temp_max, ph_min, ph_max, water_level_min, water_level_max) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+        [defaults.temp_min, defaults.temp_max, defaults.ph_min, defaults.ph_max, defaults.water_level_min, defaults.water_level_max]
+      );
+      savedSettings = result.rows[0];
+    }
+    res.json({ message: "Settings reset to defaults", data: savedSettings });
+  } catch (err) {
+    res.status(500).json({ message: "Error resetting settings", error: err.message });
+  }
+});
+
+// GET /settings/recipients
 app.get("/settings/recipients", requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(
-      "SELECT id, phone_number, name, is_active, created_at FROM authorized_recipients ORDER BY created_at DESC"
-    );
+    const result = await pool.query("SELECT id, phone_number, name, is_active, created_at FROM authorized_recipients ORDER BY created_at DESC");
     res.json(result.rows);
   } catch (err) {
-    console.error(`[${new Date().toISOString()}] Error fetching recipients:`, err);
     res.status(500).json({ error: "Failed to fetch recipients" });
   }
 });
 
+// POST /settings/recipients
 app.post("/settings/recipients", requireAdmin, async (req, res) => {
   try {
     const { phone_number, name } = req.body;
-
-    if (!/^\+639\d{8}$/.test(phone_number)) {
-      return res.status(400).json({ error: "Invalid Philippine phone number. Format: +639XXXXXXXX" });
-    }
-
-    const existing = await pool.query(
-      "SELECT * FROM authorized_recipients WHERE phone_number = $1",
-      [phone_number]
-    );
-    if (existing.rows.length > 0) {
-      const updates = { name: name || "Recipient" };
-      const changes = getChangedFields(existing.rows[0], updates);
-      if (Object.keys(changes).length === 0) {
-        return res.json({
-          success: true,
-          message: "No recipient change detected",
-          changed: false,
-          data: existing.rows[0],
-        });
-      }
-      return res.status(409).json({ error: "Phone number already exists" });
-    }
-
-    const result = await pool.query(
-      "INSERT INTO authorized_recipients (phone_number, name) VALUES ($1, $2) RETURNING *",
-      [phone_number, name || "Recipient"]
-    );
-
-    res.status(201).json({ success: true, message: "Recipient added", changed: true, data: result.rows[0] });
+    if (!/^\+639\d{9}$/.test(phone_number)) return res.status(400).json({ error: "Invalid format: +639XXXXXXXXX" });
+    const existing = await pool.query("SELECT * FROM authorized_recipients WHERE phone_number = $1", [phone_number]);
+    if (existing.rows.length > 0) return res.status(409).json({ error: "Phone number already exists" });
+    const result = await pool.query("INSERT INTO authorized_recipients (phone_number, name) VALUES ($1, $2) RETURNING *", [phone_number, name || "Recipient"]);
+    res.status(201).json({ success: true, data: result.rows[0] });
   } catch (err) {
-    if (err.code === "23505") {
-      return res.status(409).json({ error: "Phone number already exists" });
-    }
-    console.error(`[${new Date().toISOString()}] Error adding recipient:`, err);
     res.status(500).json({ error: "Failed to add recipient" });
   }
 });
 
+// PUT /settings/recipients/:id
 app.put("/settings/recipients/:id", requireAdmin, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
-    if (!Number.isInteger(id)) {
-      return res.status(400).json({ error: "Invalid recipient id" });
-    }
-
-    const parsed = recipientUpdateSchema.safeParse(req.body);
-    if (!parsed.success) {
-      return res.status(400).json({
-        error: "Validation error",
-        errors: parsed.error.flatten().fieldErrors,
-      });
-    }
-
     const existing = await pool.query("SELECT * FROM authorized_recipients WHERE id = $1", [id]);
-    if (existing.rows.length === 0) {
-      return res.status(404).json({ error: "Recipient not found" });
-    }
-
-    const updateResult = await updateOnlyIfChanged(pool, {
-      table: "authorized_recipients",
-      keyColumn: "id",
-      keyValue: id,
-      currentRow: existing.rows[0],
-      updates: parsed.data,
-      touchUpdatedAt: true,
-    });
-
-    if (updateResult.changed) {
-      res.json({ success: true, message: "Recipient updated", changed: true, data: updateResult.row });
-    } else {
-      res.json({ success: true, message: "No recipient change detected", changed: false, data: existing.rows[0] });
-    }
+    if (existing.rows.length === 0) return res.status(404).json({ error: "Not found" });
+    const updates = { name: req.body.name, is_active: req.body.is_active };
+    const result = await updateOnlyIfChanged(pool, { table: "authorized_recipients", keyColumn: "id", keyValue: id, currentRow: existing.rows[0], updates: Object.fromEntries(Object.entries(updates).filter(([, v]) => v !== undefined)), touchUpdatedAt: true });
+    res.json(result.changed ? { success: true, data: result.row } : { success: true, message: "No change", data: existing.rows[0] });
   } catch (err) {
-    console.error(`[${new Date().toISOString()}] Error updating recipient:`, err);
     res.status(500).json({ error: "Failed to update recipient" });
   }
 });
 
+// DELETE /settings/recipients/:id
 app.delete("/settings/recipients/:id", requireAdmin, async (req, res) => {
   try {
-    const { id } = req.params;
-
-    const result = await pool.query(
-      "DELETE FROM authorized_recipients WHERE id = $1 RETURNING id",
-      [id]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: "Recipient not found" });
-    }
-
-    res.json({ success: true, message: "Recipient deleted" });
+    const result = await pool.query("DELETE FROM authorized_recipients WHERE id = $1 RETURNING id", [req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: "Not found" });
+    res.json({ success: true, message: "Deleted" });
   } catch (err) {
-    console.error(`[${new Date().toISOString()}] Error deleting recipient:`, err);
     res.status(500).json({ error: "Failed to delete recipient" });
   }
 });
 
+// POST /settings/recipients/test/:id
 app.post("/settings/recipients/test/:id", requireAdmin, async (req, res) => {
   try {
-    const { id } = req.params;
-
-    const result = await pool.query(
-      "SELECT phone_number, name FROM authorized_recipients WHERE id = $1",
-      [id]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: "Recipient not found" });
-    }
-
+    const result = await pool.query("SELECT phone_number, name FROM authorized_recipients WHERE id = $1", [req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: "Not found" });
     const { phone_number, name } = result.rows[0];
-    // Use the critical alert template for test SMS (with test indicator)
-    const testMessage = buildMessage(SMS_CONFIG.messages.critical, {
-      'SENSOR': 'TEST ALERT',
-      'NAME': name,
-      'VALUE': 'N/A',
-      'UNIT': '',
-      'THRESHOLD': 'N/A',
-      'TIME': new Date().toLocaleString('en-PH', {
-        timeZone: 'Asia/Manila',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: true
-      })
-    }) + "\n(This is a test message)";
+
+    const settingsResult = await pool.query("SELECT * FROM sensor_settings LIMIT 1");
+    const settings = settingsResult.rows[0] || { temp_min: 20, temp_max: 31, ph_min: 6.5, ph_max: 8.5, water_level_min: 10, water_level_max: 100 };
+    const sensorResult = await pool.query("SELECT * FROM sensors ORDER BY timestamp DESC LIMIT 1");
+    const sensor = sensorResult.rows[0] || null;
+
+    const temp = sensor?.temperature ?? "N/A";
+    const ph = sensor?.ph ?? "N/A";
+    const water = sensor?.water_level ?? "N/A";
+    const tempStatus = sensor ? getStatusText(getThresholdStatus(Number(sensor.temperature), Number(settings.temp_min), Number(settings.temp_max))) : "N/A";
+    const phStatus = sensor ? getStatusText(getThresholdStatus(Number(sensor.ph), Number(settings.ph_min), Number(settings.ph_max))) : "N/A";
+    const waterStatus = sensor ? getStatusText(getThresholdStatus(Number(sensor.water_level), Number(settings.water_level_min), Number(settings.water_level_max))) : "N/A";
+    const timestamp = new Date().toLocaleString("en-PH", { timeZone: "Asia/Manila", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: true });
+    const summary = (tempStatus === "✅ Good" && phStatus === "✅ Good" && waterStatus === "✅ Good") ? "All systems normal" : "Some parameters need attention";
+    const testMessage = `📊 CRAYVINGS LIVE READINGS (TEST)\nTime: ${timestamp}\nTemperature: ${temp}°C (${tempStatus})\npH Level: ${ph} (${phStatus})\nWater Level: ${water}% (${waterStatus})\n${summary}\n(This is a test message)`;
 
     await sendSingleSMS(phone_number, testMessage);
-
-    res.json({ success: true, message: "Test SMS sent", recipient: name });
+    res.json({ success: true, message: "Test SMS sent" });
   } catch (err) {
-    console.error(`[${new Date().toISOString()}] Error sending test SMS:`, err);
     res.status(500).json({ error: "Failed to send test SMS" });
   }
 });
 
-// SMS logs endpoint
-app.get("/settings/sms-logs", requireAdmin, async (req, res) => {
+// POST /logs
+app.post("/logs", async (req, res) => {
+  try {
+    const { action, parameter, old_value, new_value } = req.body;
+    if (!action || !parameter) return res.status(400).json({ message: "action and parameter required" });
+    const result = await pool.query(
+      "INSERT INTO system_logs (action, parameter, old_value, new_value) VALUES ($1, $2, $3, $4) RETURNING *",
+      [action, parameter, String(old_value ?? ""), String(new_value ?? "")]
+    );
+    res.status(201).json({ message: "Logged", data: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ message: "Error logging", error: err.message });
+  }
+});
+
+// GET /system-logs
+app.get("/system-logs", async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
     const offset = (page - 1) * limit;
-
-    const result = await pool.query(
-      "SELECT * FROM sms_logs ORDER BY sent_at DESC LIMIT $1 OFFSET $2",
-      [limit, offset]
-    );
-
-    const countResult = await pool.query("SELECT COUNT(*) FROM sms_logs");
-    const total = parseInt(countResult.rows[0].count);
-
-    res.json({
-      data: result.rows,
-      total,
-      page,
-      totalPages: Math.ceil(total / limit)
-    });
+    const result = await pool.query("SELECT * FROM system_logs ORDER BY timestamp DESC LIMIT $1 OFFSET $2", [limit, offset]);
+    const countResult = await pool.query("SELECT COUNT(*) FROM system_logs");
+    res.json({ data: result.rows, total: parseInt(countResult.rows[0].count), page, limit });
   } catch (err) {
-    console.error(`[${new Date().toISOString()}] Error fetching SMS logs:`, err);
-    res.status(500).json({ error: "Failed to fetch SMS logs" });
+    res.status(500).json({ message: "Error fetching logs", error: err.message });
   }
 });
 
+// POST /activity-logs
+app.post("/activity-logs", async (req, res) => {
+  try {
+    const { user_name, action_type, description, module } = req.body;
+    if (!action_type) return res.status(400).json({ message: "action_type required" });
+    const result = await pool.query(
+      "INSERT INTO activity_logs (user_name, action_type, description, module) VALUES ($1, $2, $3, $4) RETURNING *",
+      [user_name || "Admin", action_type, description || "", module || ""]
+    );
+    res.status(201).json({ message: "Logged", data: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ message: "Error logging activity", error: err.message });
+  }
+});
+
+// GET /activity-logs
+app.get("/activity-logs", async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = 20;
+    const offset = (page - 1) * limit;
+    const search = req.query.search || "";
+    const sortBy = req.query.sortBy === "oldest" ? "ASC" : "DESC";
+    const actionType = req.query.actionType || "";
+
+    let where = [];
+    let params = [];
+    let paramCount = 1;
+    if (search) { where.push(`(description ILIKE $${paramCount} OR user_name ILIKE $${paramCount})`); params.push(`%${search}%`); paramCount++; }
+    if (actionType) { where.push(`action_type = $${paramCount}`); params.push(actionType); paramCount++; }
+    const whereClause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
+
+    const result = await pool.query(
+      `SELECT * FROM activity_logs ${whereClause} ORDER BY timestamp ${sortBy} LIMIT $${paramCount} OFFSET $${paramCount + 1}`,
+      [...params, limit, offset]
+    );
+    const countResult = await pool.query(`SELECT COUNT(*) FROM activity_logs ${whereClause}`, params);
+    const total = parseInt(countResult.rows[0].count);
+    res.json({ data: result.rows, total, page, limit, totalPages: Math.ceil(total / limit) });
+  } catch (err) {
+    res.status(500).json({ message: "Error fetching activity logs", error: err.message });
+  }
+});
+
+// =============================================================================
+// Startup
+// =============================================================================
 async function startServer() {
   try {
     const client = await pool.connect();
     try {
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS sensors (
-          id SERIAL PRIMARY KEY,
-          device_id VARCHAR(50) NOT NULL,
-          temperature DECIMAL(5,2) DEFAULT 0,
-          water_level DECIMAL(5,2) DEFAULT 0,
-          ph DECIMAL(5,2) DEFAULT 0,
-          timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-      `);
-      
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS system_logs (
-          id SERIAL PRIMARY KEY,
-          action VARCHAR(100) NOT NULL,
-          parameter VARCHAR(100) NOT NULL,
-          old_value VARCHAR(50),
-          new_value VARCHAR(50),
-          timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-      `);
-      
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS sensor_settings (
-          id SERIAL PRIMARY KEY,
-          temp_min DECIMAL(5,2) DEFAULT 20.0,
-          temp_max DECIMAL(5,2) DEFAULT 31.0,
-          ph_min DECIMAL(5,2) DEFAULT 6.5,
-          ph_max DECIMAL(5,2) DEFAULT 8.5,
-          water_level_min DECIMAL(5,2) DEFAULT 10.0,
-          water_level_max DECIMAL(5,2) DEFAULT 100.0,
-          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-      `);
-
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS activity_logs (
-          id SERIAL PRIMARY KEY,
-          user_name VARCHAR(100) DEFAULT 'Admin',
-          action_type VARCHAR(50) NOT NULL,
-          description TEXT,
-          module VARCHAR(100),
-          timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-      `);
-
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS authorized_recipients (
-          id SERIAL PRIMARY KEY,
-          phone_number VARCHAR(20) NOT NULL UNIQUE,
-          name VARCHAR(100),
-          is_active BOOLEAN DEFAULT true,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-      `);
-
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS users (
-          id SERIAL PRIMARY KEY,
-          name VARCHAR(100) NOT NULL,
-          username VARCHAR(50) NOT NULL UNIQUE,
-          email VARCHAR(255) NOT NULL UNIQUE,
-          password_hash VARCHAR(255) NOT NULL,
-          role VARCHAR(20) NOT NULL DEFAULT 'user',
-          token VARCHAR(255),
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-      `);
+      console.log(`[${new Date().toISOString()}] PostgreSQL connected`);
 
       const adminExists = await client.query("SELECT id, password_hash FROM users WHERE username = $1", ["admin"]);
       if (adminExists.rows.length === 0) {
         const adminPassword = hashPassword("Admin@123");
         await client.query(
-          `INSERT INTO users (name, username, email, password_hash, role)
-           VALUES ('Administrator', 'admin', 'admin@crayvings.com', $1, 'admin')`,
+          `INSERT INTO users (name, username, email, password_hash, role) VALUES ('Administrator', 'admin', 'admin@crayvings.com', $1, 'admin')`,
           [adminPassword]
         );
-        console.log(`[${new Date().toISOString()}] Default admin account created (username: admin, password: Admin@123)`);
+        console.log(`[${new Date().toISOString()}] Default admin account created (admin / Admin@123)`);
       } else {
         const storedHash = adminExists.rows[0].password_hash;
         if (verifyPassword("Admin@123", storedHash)) {
-          console.log(`[${new Date().toISOString()}] Admin account verified (username: admin)`);
+          console.log(`[${new Date().toISOString()}] Admin account verified`);
         } else {
-          console.log(`[${new Date().toISOString()}] Admin account exists with a non-default password; skipping startup password update`);
+          console.log(`[${new Date().toISOString()}] Admin account exists with custom password`);
         }
       }
 
-      await client.query(`
-        INSERT INTO authorized_recipients (phone_number, name)
-        VALUES ('+639770928085', 'Test Recipient')
-        ON CONFLICT (phone_number) DO NOTHING
-      `);
-      console.log(`[${new Date().toISOString()}] Test recipient +639770928085 added`);
-
-      // New: sms_logs table
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS sms_logs (
-          id SERIAL PRIMARY KEY,
-          recipient_phone VARCHAR(20) NOT NULL,
-          message TEXT NOT NULL,
-          status VARCHAR(20) NOT NULL,
-          error_message TEXT,
-          sms_id VARCHAR(100),
-          sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-      `);
-      console.log(`[${new Date().toISOString()}] sms_logs table ready`);
-
-      // New: last_alerts table for persistent rate limiting
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS last_alerts (
-          sensor_key VARCHAR(50) PRIMARY KEY,
-          status VARCHAR(20),
-          value DECIMAL(5,2),
-          timestamp TIMESTAMP
-        )
-      `);
-      console.log(`[${new Date().toISOString()}] last_alerts table ready`);
-
-      // Load last alert state from database
       const lastAlertsResult = await client.query("SELECT * FROM last_alerts");
       lastAlertedState = {};
       for (const row of lastAlertsResult.rows) {
-        lastAlertedState[row.sensor_key] = {
-          status: row.status,
-          value: parseFloat(row.value),
-          timestamp: row.timestamp?.toISOString()
-        };
+        lastAlertedState[row.sensor_key] = { status: row.status, value: parseFloat(row.value), timestamp: row.timestamp?.toISOString() };
       }
       console.log(`[${new Date().toISOString()}] Loaded ${lastAlertsResult.rows.length} alert states from DB`);
 
-      await client.query(`
-        CREATE INDEX IF NOT EXISTS idx_activity_logs_timestamp ON activity_logs(timestamp DESC)
-      `);
-      
-      await client.query(`
-        CREATE INDEX IF NOT EXISTS idx_activity_logs_action_type ON activity_logs(action_type)
-      `);
-
-      await client.query(`
-        CREATE INDEX IF NOT EXISTS idx_sensors_timestamp ON sensors(timestamp DESC)
-      `);
-
-      await client.query(`
-        CREATE INDEX IF NOT EXISTS idx_sensors_device_id ON sensors(device_id)
-      `);
-
-      await client.query(`
-        CREATE INDEX IF NOT EXISTS idx_system_logs_timestamp ON system_logs(timestamp DESC)
-      `);
-      
-      const logsCount = await client.query("SELECT COUNT(*) FROM system_logs");
-      console.log(`[${new Date().toISOString()}] Logs table ready (${logsCount.rows[0].count} records)`);
-      
-      const result = await client.query("SELECT COUNT(*) FROM sensors");
-      console.log(`[${new Date().toISOString()}] Sensor records count: ${result.rows[0].count}`);
-      console.log(`[${new Date().toISOString()}] PostgreSQL connected and table ready`);
-
-      // SkySMS credential check
       if (!process.env.SKYSMS_API_KEY) {
         console.warn(`[${new Date().toISOString()}] WARNING: SKYSMS_API_KEY not set. SMS alerts will fail.`);
       } else {
-        console.log(`[${new Date().toISOString()}] SkySMS configured (API key present)`);
+        console.log(`[${new Date().toISOString()}] SkySMS configured`);
       }
     } finally {
       client.release();
     }
 
     app.listen(PORT, "0.0.0.0", () => {
-      console.log(`[${new Date().toISOString()}] Server started on port ${PORT}`);
+      console.log(`[${new Date().toISOString()}] Server running on http://0.0.0.0:${PORT}`);
     });
   } catch (err) {
     console.error(`[${new Date().toISOString()}] Server startup error:`, err.message);

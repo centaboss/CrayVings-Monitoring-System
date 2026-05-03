@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo, useEffect } from "react";
 import { useSensorSettings, useActivityLogger } from "../hooks/useSensors";
-import { useAuth } from "../contexts/AuthContext";
+import { useAuth } from "../contexts/useAuth";
 import {
   Settings,
   Save,
@@ -16,12 +16,18 @@ import {
   EyeOff,
   CheckCircle2,
   Loader2,
+  RefreshCw,
+  Phone,
+  MessageSquare,
+  Send,
+  ToggleLeft,
+  ToggleRight,
 } from "lucide-react";
 import type { SensorSettings } from "../types";
 import { DEFAULT_SETTINGS, getSettingsThresholds } from "../types";
 import { z } from "zod";
-import { fetchUsers, createUser, deleteUser, resetUserPassword } from "../api/client";
-import type { UserEntry } from "../api/client";
+import { fetchUsers, createUser, deleteUser, resetUserPassword, resetSettings as apiResetSettings, fetchRecipients, addRecipient, deleteRecipient, sendTestSms, updateRecipient } from "../api/client";
+import type { UserEntry, SmsRecipient } from "../api/client";
 
 const SETTING_BOUNDS: Record<string, { min: number; max: number }> = {
   temp_min: { min: -10, max: 50 },
@@ -117,6 +123,7 @@ export default function SettingsPage() {
     saveSettings,
     settingsSaved,
     settingsSaving,
+    refetchSettings,
   } = useSensorSettings();
   const { user } = useAuth();
   const logActivity = useActivityLogger();
@@ -125,6 +132,13 @@ export default function SettingsPage() {
   const [localSettings, setLocalSettings] = useState<SensorSettings | null>(null);
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
   const [localSaveError, setLocalSaveError] = useState<string | null>(null);
+  const [isResetting, setIsResetting] = useState(false);
+
+  const [recipients, setRecipients] = useState<SmsRecipient[]>([]);
+  const [isLoadingRecipients, setIsLoadingRecipients] = useState(true);
+  const [showAddRecipient, setShowAddRecipient] = useState(false);
+  const [newRecipient, setNewRecipient] = useState({ phone_number: "", name: "" });
+  const [recipientErrors, setRecipientErrors] = useState<FormErrors>({});
 
   const [users, setUsers] = useState<UserEntry[]>([]);
   const [isLoadingUsers, setIsLoadingUsers] = useState(true);
@@ -133,7 +147,7 @@ export default function SettingsPage() {
   const [formErrors, setFormErrors] = useState<FormErrors>({});
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [resetModal, setResetModal] = useState<{ id: number; name: string; password: string; errors: FormErrors } | null>(null);
-  const [deleteConfirm, setDeleteConfirm] = useState<{ id: number; username: string } | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ id: number; username: string; type: "user" | "recipient" } | null>(null);
   const [toasts, setToasts] = useState<{ id: number; message: string; type: "success" | "error" }[]>([]);
 
   const showToast = useCallback((message: string, type: "success" | "error") => {
@@ -205,11 +219,102 @@ export default function SettingsPage() {
 
     try {
       await saveSettings(localSettings);
+      refetchSettings();
       logActivity("settings_change", "Updated sensor thresholds", "Settings");
     } catch {
       setLocalSaveError("Failed to save settings");
     }
   }, [localSettings, settings, saveSettings, validationErrors, logActivity]);
+
+  const handleResetSettings = useCallback(async () => {
+    setIsResetting(true);
+    setLocalSaveError(null);
+    try {
+      await apiResetSettings();
+      setLocalSettings(null);
+      refetchSettings();
+      logActivity("settings_change", "Reset sensor thresholds to defaults", "Settings");
+      showToast("Settings reset to defaults", "success");
+    } catch {
+      setLocalSaveError("Failed to reset settings");
+    } finally {
+      setIsResetting(false);
+    }
+  }, [logActivity, showToast, refetchSettings]);
+
+  const loadRecipients = useCallback(async () => {
+    try {
+      const data = await fetchRecipients();
+      setRecipients(data);
+    } catch {
+      showToast("Failed to load recipients", "error");
+    } finally {
+      setIsLoadingRecipients(false);
+    }
+  }, [showToast]);
+
+  const handleAddRecipient = useCallback(async (e: React.FormEvent) => {
+    e.preventDefault();
+    const errors: FormErrors = {};
+    if (!newRecipient.name.trim()) errors.name = "Name is required";
+    if (!newRecipient.phone_number.trim()) errors.phone_number = "Phone number is required";
+    else if (!/^\+639\d{9}$/.test(newRecipient.phone_number.trim())) errors.phone_number = "Format: +639XXXXXXXXX (11 digits)";
+    setRecipientErrors(errors);
+    if (Object.keys(errors).length > 0) return;
+    setActionLoading("add-recipient");
+    try {
+      await addRecipient(newRecipient.phone_number.trim(), newRecipient.name.trim());
+      showToast("Recipient added", "success");
+      setNewRecipient({ phone_number: "", name: "" });
+      setShowAddRecipient(false);
+      await loadRecipients();
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        const msg = err.message.includes("already exists") ? "Phone number already exists" : err.message;
+        showToast(msg, "error");
+      } else {
+        showToast("Failed to add recipient", "error");
+      }
+    } finally {
+      setActionLoading(null);
+    }
+  }, [newRecipient, showToast, loadRecipients]);
+
+  const handleToggleRecipient = useCallback(async (id: number, current: boolean) => {
+    try {
+      await updateRecipient(id, { is_active: !current });
+      setRecipients((prev) => prev.map((r) => (r.id === id ? { ...r, is_active: !current } : r)));
+      showToast(!current ? "Recipient enabled" : "Recipient disabled", "success");
+    } catch {
+      showToast("Failed to update recipient", "error");
+    }
+  }, [showToast]);
+
+  const handleDeleteRecipient = useCallback(async (id: number, name: string) => {
+    setActionLoading(`delete-recipient-${id}`);
+    try {
+      await deleteRecipient(id);
+      showToast(`"${name}" removed`, "success");
+      setDeleteConfirm(null);
+      await loadRecipients();
+    } catch {
+      showToast("Failed to delete recipient", "error");
+    } finally {
+      setActionLoading(null);
+    }
+  }, [showToast, loadRecipients]);
+
+  const handleTestSms = useCallback(async (id: number, name: string) => {
+    setActionLoading(`test-sms-${id}`);
+    try {
+      await sendTestSms(id);
+      showToast(`Test SMS sent to ${name}`, "success");
+    } catch {
+      showToast("Failed to send test SMS", "error");
+    } finally {
+      setActionLoading(null);
+    }
+  }, [showToast]);
 
   const thresholdConfig = useMemo(
     () => getSettingsThresholds(displaySettings),
@@ -244,6 +349,10 @@ export default function SettingsPage() {
       void loadInitialUsers();
     }
   }, [isAdmin, showToast]);
+
+  useEffect(() => {
+    void loadRecipients();
+  }, [loadRecipients]);
 
   const validateForm = useCallback((): FormErrors => {
     try {
@@ -439,14 +548,24 @@ export default function SettingsPage() {
 
       <div className="flex items-center gap-3">
         {isAdmin ? (
-          <button
-            onClick={handleSave}
-            disabled={settingsSaving || Object.keys(validationErrors).length > 0}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white rounded-lg text-sm font-medium transition-colors"
-          >
-            <Save size={16} />
-            {settingsSaving ? "Saving..." : "Save Settings"}
-          </button>
+          <>
+            <button
+              onClick={handleSave}
+              disabled={settingsSaving || Object.keys(validationErrors).length > 0}
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white rounded-lg text-sm font-medium transition-colors"
+            >
+              <Save size={16} />
+              {settingsSaving ? "Saving..." : "Save Settings"}
+            </button>
+            <button
+              onClick={handleResetSettings}
+              disabled={isResetting}
+              className="flex items-center gap-2 px-4 py-2 bg-gray-600 hover:bg-gray-700 disabled:bg-gray-400 text-white rounded-lg text-sm font-medium transition-colors"
+            >
+              <RefreshCw size={16} className={isResetting ? "animate-spin" : ""} />
+              {isResetting ? "Resetting..." : "Reset to Defaults"}
+            </button>
+          </>
         ) : (
           <div className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-400 rounded-lg text-sm font-medium cursor-not-allowed">
             <Lock size={16} />
@@ -460,6 +579,149 @@ export default function SettingsPage() {
 
       {isAdmin && (
         <div className="space-y-6 pt-6 border-t border-gray-200">
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-lg font-bold text-gray-800">SMS Recipients</h2>
+                <p className="text-sm text-gray-500">Phone numbers that receive alert and hourly status messages</p>
+              </div>
+              {!showAddRecipient && (
+                <button
+                  onClick={() => setShowAddRecipient(true)}
+                  className="flex items-center gap-2 bg-gradient-to-r from-[#d94b1e] to-[#ef6a2e] text-white px-4 py-2 rounded-lg font-semibold text-sm hover:from-[#c2410c] hover:to-[#d94b1e] transition-all"
+                >
+                  <UserPlus size={16} />
+                  Add Recipient
+                </button>
+              )}
+            </div>
+
+            {showAddRecipient && (
+              <div className="bg-white rounded-lg shadow p-6 mb-4">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-md font-bold text-gray-800">Add New Recipient</h3>
+                  <button
+                    onClick={() => { setShowAddRecipient(false); setRecipientErrors({}); setNewRecipient({ phone_number: "", name: "" }); }}
+                    className="text-gray-400 hover:text-gray-600"
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
+                <form onSubmit={handleAddRecipient} className="flex flex-col sm:flex-row gap-3 items-end">
+                  <div className="flex-1">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
+                    <input
+                      type="text"
+                      value={newRecipient.name}
+                      onChange={(e) => { setNewRecipient((p) => ({ ...p, name: e.target.value })); if (recipientErrors.name) setRecipientErrors((p) => ({ ...p, name: "" })); }}
+                      className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-[#d94b1e]/20 focus:border-[#d94b1e] ${recipientErrors.name ? "border-red-500 bg-red-50" : "border-gray-300"}`}
+                      placeholder="e.g. Admin, Manager"
+                    />
+                    {recipientErrors.name && <p className="mt-1 text-xs text-red-600">{recipientErrors.name}</p>}
+                  </div>
+                  <div className="flex-1">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number</label>
+                    <input
+                      type="text"
+                      value={newRecipient.phone_number}
+                      onChange={(e) => { setNewRecipient((p) => ({ ...p, phone_number: e.target.value })); if (recipientErrors.phone_number) setRecipientErrors((p) => ({ ...p, phone_number: "" })); }}
+                      className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-[#d94b1e]/20 focus:border-[#d94b1e] ${recipientErrors.phone_number ? "border-red-500 bg-red-50" : "border-gray-300"}`}
+                      placeholder="+639XXXXXXXXX"
+                    />
+                    {recipientErrors.phone_number && <p className="mt-1 text-xs text-red-600">{recipientErrors.phone_number}</p>}
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={actionLoading === "add-recipient"}
+                    className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold text-sm hover:bg-blue-700 disabled:opacity-50 h-10"
+                  >
+                    {actionLoading === "add-recipient" ? <Loader2 size={16} className="animate-spin" /> : <UserPlus size={16} />}
+                    Add
+                  </button>
+                </form>
+              </div>
+            )}
+
+            {isLoadingRecipients ? (
+              <div className="bg-white rounded-lg shadow p-8 text-center">
+                <Loader2 size={32} className="animate-spin mx-auto text-gray-400" />
+                <p className="text-sm text-gray-500 mt-2">Loading recipients...</p>
+              </div>
+            ) : recipients.length === 0 ? (
+              <div className="bg-white rounded-lg shadow p-8 text-center">
+                <MessageSquare size={32} className="mx-auto text-gray-400 mb-2" />
+                <p className="text-sm text-gray-500">No recipients added yet. Click "Add Recipient" to start receiving SMS alerts.</p>
+              </div>
+            ) : (
+              <div className="bg-white rounded-lg shadow overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="bg-gray-50 border-b border-gray-200">
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Name</th>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Phone</th>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Status</th>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Added</th>
+                        <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {recipients.map((r) => (
+                        <tr key={r.id} className="hover:bg-gray-50 transition-colors">
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-2">
+                              <Phone size={14} className="text-gray-400" />
+                              <p className="font-medium text-gray-800 text-sm">{r.name}</p>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-sm text-gray-600 font-mono">{r.phone_number}</td>
+                          <td className="px-4 py-3">
+                            <button
+                              onClick={() => handleToggleRecipient(r.id, r.is_active)}
+                              className="flex items-center gap-1 text-sm font-semibold"
+                            >
+                              {r.is_active ? (
+                                <ToggleRight size={20} className="text-emerald-500" />
+                              ) : (
+                                <ToggleLeft size={20} className="text-gray-400" />
+                              )}
+                              <span className={r.is_active ? "text-emerald-600" : "text-gray-400"}>
+                                {r.is_active ? "Active" : "Disabled"}
+                              </span>
+                            </button>
+                          </td>
+                          <td className="px-4 py-3 text-sm text-gray-500">
+                            {new Date(r.created_at).toLocaleDateString()}
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center justify-end gap-1">
+                              <button
+                                onClick={() => handleTestSms(r.id, r.name)}
+                                disabled={actionLoading === `test-sms-${r.id}`}
+                                className="flex items-center gap-1 px-2 py-1.5 text-xs font-medium text-blue-600 hover:bg-blue-50 rounded-md transition-colors disabled:opacity-50"
+                                title="Send Test SMS"
+                              >
+                                {actionLoading === `test-sms-${r.id}` ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+                                Test
+                              </button>
+                              <button
+                                onClick={() => setDeleteConfirm({ id: r.id, username: r.name, type: "recipient" })}
+                                className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors"
+                                title="Delete Recipient"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-lg font-bold text-gray-800">User Management</h2>
@@ -711,7 +973,7 @@ export default function SettingsPage() {
                             </button>
                             {user?.id !== u.id && (
                               <button
-                                onClick={() => setDeleteConfirm({ id: u.id, username: u.username })}
+                                onClick={() => setDeleteConfirm({ id: u.id, username: u.username, type: "user" })}
                                 className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors"
                                 title="Delete User"
                               >
@@ -800,12 +1062,18 @@ export default function SettingsPage() {
                 <AlertTriangle className="text-red-600" size={20} />
               </div>
               <div>
-                <h3 className="text-lg font-bold text-gray-800">Delete User</h3>
+                <h3 className="text-lg font-bold text-gray-800">
+                  {deleteConfirm.type === "user" ? "Delete User" : "Delete Recipient"}
+                </h3>
                 <p className="text-sm text-gray-500">This action cannot be undone</p>
               </div>
             </div>
             <p className="text-sm text-gray-600 mb-6">
-              Are you sure you want to delete the account <span className="font-semibold">{deleteConfirm.username}</span>?
+              {deleteConfirm.type === "user" ? (
+                <>Are you sure you want to delete the account <span className="font-semibold">{deleteConfirm.username}</span>?</>
+              ) : (
+                <>Are you sure you want to remove <span className="font-semibold">{deleteConfirm.username}</span> from receiving SMS alerts?</>
+              )}
             </p>
             <div className="flex gap-2 justify-end">
               <button
@@ -815,11 +1083,11 @@ export default function SettingsPage() {
                 Cancel
               </button>
               <button
-                onClick={() => handleDeleteUser(deleteConfirm.id)}
-                disabled={actionLoading === `delete-${deleteConfirm.id}`}
+                onClick={() => deleteConfirm.type === "user" ? handleDeleteUser(deleteConfirm.id) : handleDeleteRecipient(deleteConfirm.id, deleteConfirm.username)}
+                disabled={actionLoading === `delete-${deleteConfirm.id}` || actionLoading === `delete-recipient-${deleteConfirm.id}`}
                 className="flex items-center gap-2 bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-red-700 disabled:opacity-50"
               >
-                {actionLoading === `delete-${deleteConfirm.id}` ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
+                {actionLoading === `delete-${deleteConfirm.id}` || actionLoading === `delete-recipient-${deleteConfirm.id}` ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
                 Delete
               </button>
             </div>

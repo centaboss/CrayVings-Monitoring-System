@@ -5,7 +5,7 @@ import { loginUser } from "../api/client";
 const TOKEN_KEY = "crayvings_token";
 const USER_KEY = "crayvings_user";
 
-interface AuthContextType {
+export interface AuthContextType {
   user: AuthUser | null;
   isLoading: boolean;
   error: string | null;
@@ -14,15 +14,7 @@ interface AuthContextType {
   clearError: () => void;
 }
 
-const AuthContext = createContext<AuthContextType | null>(null);
-
-export function useAuth(): AuthContextType {
-  const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error("useAuth must be used within an AuthProvider");
-  }
-  return context;
-}
+export const AuthContext = createContext<AuthContextType | null>(null);
 
 interface AuthProviderProps {
   children: ReactNode;

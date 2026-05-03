@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import {
   History,
   Thermometer,
@@ -60,34 +60,46 @@ export default function HistoricalDataPage() {
     }
   };
 
+  const shouldFetchDynamic = (range: TimeRange): boolean => {
+    const limit = getLimitForRange(range);
+    return limit > 300 || history.length === 0;
+  };
+
+  const prevTimeRangeRef = useRef<TimeRange>(timeRange);
+
   useEffect(() => {
-    const limit = getLimitForRange(timeRange);
-    
-    if (limit <= 300 && history.length > 0) {
+    if (prevTimeRangeRef.current !== timeRange && !shouldFetchDynamic(timeRange)) {
       setDynamicHistory([]);
-      return;
+      setDynamicLoading(false);
     }
-    
-    let cancelled = false;
+    prevTimeRangeRef.current = timeRange;
+  }, [timeRange, history.length]);
+
+  const fetchDynamicData = useCallback(async (range: TimeRange, signal: AbortSignal) => {
+    const limit = getLimitForRange(range);
+    const data = await fetchSensorHistory(limit, signal);
+    return data;
+  }, []);
+
+  useEffect(() => {
+    if (!shouldFetchDynamic(timeRange)) return;
+
     const controller = new AbortController();
-    
     setDynamicLoading(true);
-    fetchSensorHistory(limit, controller.signal)
+
+    fetchDynamicData(timeRange, controller.signal)
       .then(data => {
-        if (!cancelled) {
-          setDynamicHistory(data);
-          setDynamicLoading(false);
-        }
+        setDynamicHistory(data);
+        setDynamicLoading(false);
       })
       .catch(() => {
-        if (!cancelled) setDynamicLoading(false);
+        setDynamicLoading(false);
       });
-    
+
     return () => {
-      cancelled = true;
       controller.abort();
     };
-  }, [timeRange]);
+  }, [timeRange, history.length, fetchDynamicData]);
 
   const activeHistory = dynamicHistory.length > 0 ? dynamicHistory : history;
   const activeLoading = dynamicLoading || loading;

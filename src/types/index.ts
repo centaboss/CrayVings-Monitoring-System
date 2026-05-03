@@ -108,19 +108,23 @@ export function getThresholdStatus(
   range: ThresholdRange,
   isMinOnly: boolean
 ): ThresholdStatus {
+  const min = Number(range.min);
+  const max = Number(range.max);
+  const val = Number(value);
+
   if (isMinOnly) {
-    return value >= range.min ? "good" : "warning";
+    return val >= min ? "good" : "warning";
   }
   
-  const rangeSize = range.max - range.min;
+  const rangeSize = max - min;
   const criticalMargin = rangeSize * 0.15;
   
-  if (value < range.min) {
-    const deviation = range.min - value;
+  if (val < min) {
+    const deviation = min - val;
     return deviation >= criticalMargin ? "critical" : "warning";
   }
-  if (value > range.max) {
-    const deviation = value - range.max;
+  if (val > max) {
+    const deviation = val - max;
     return deviation >= criticalMargin ? "critical" : "warning";
   }
   

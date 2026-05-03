@@ -1,7 +1,7 @@
 import { useState, useCallback } from "react";
 import { z } from "zod";
 import { Eye, EyeOff, User, Lock, LogIn } from "lucide-react";
-import { useAuth } from "../contexts/AuthContext";
+import { useAuth } from "../contexts/useAuth";
 import logo from "../assets/craybitch without background.png";
 
 const loginSchema = z.object({

@@ -26,7 +26,8 @@ import ActivityLogsPage from "./pages/ActivityLogsPage";
 import AuthPage from "./pages/AuthPage";
 import { SensorProvider } from "./contexts/SensorProvider";
 import { useActivityLogs } from "./contexts/SensorContext";
-import { AuthProvider, useAuth } from "./contexts/AuthContext";
+import { AuthProvider } from "./contexts/AuthContext";
+import { useAuth } from "./contexts/useAuth";
 import { FloatingAlertProvider, FloatingAlertContainer } from "./components/FloatingAlert";
 import { useThresholdAlert } from "./hooks/useThresholdAlert";
 

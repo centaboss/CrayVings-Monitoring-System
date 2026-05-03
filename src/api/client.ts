@@ -125,6 +125,43 @@ export async function saveSettings(settings: Partial<SensorSettings>, signal?: A
   await client.post("/settings", settings, { signal });
 }
 
+export async function resetSettings(signal?: AbortSignal): Promise<SensorSettings> {
+  const response = await client.post<{ data: SensorSettings }>("/settings/reset", {}, { signal });
+  return response.data.data;
+}
+
+export interface SmsRecipient {
+  id: number;
+  phone_number: string;
+  name: string;
+  is_active: boolean;
+  created_at: string;
+}
+
+export async function fetchRecipients(signal?: AbortSignal): Promise<SmsRecipient[]> {
+  const response = await client.get<SmsRecipient[]>("/settings/recipients", { signal });
+  return response.data;
+}
+
+export async function addRecipient(phone_number: string, name: string, signal?: AbortSignal): Promise<SmsRecipient> {
+  const response = await client.post<{ data: SmsRecipient }>("/settings/recipients", { phone_number, name }, { signal });
+  return response.data.data;
+}
+
+export async function updateRecipient(id: number, updates: Partial<SmsRecipient>, signal?: AbortSignal): Promise<SmsRecipient> {
+  const response = await client.put<{ data: SmsRecipient }>(`/settings/recipients/${id}`, updates, { signal });
+  return response.data.data;
+}
+
+export async function deleteRecipient(id: number, signal?: AbortSignal): Promise<void> {
+  await client.delete(`/settings/recipients/${id}`, { signal });
+}
+
+export async function sendTestSms(id: number, signal?: AbortSignal): Promise<{ success: boolean; message: string }> {
+  const response = await client.post(`/settings/recipients/test/${id}`, {}, { signal });
+  return response.data;
+}
+
 export async function createLog(
   action: string,
   parameter: string,

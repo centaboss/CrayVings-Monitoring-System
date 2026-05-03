@@ -147,7 +147,7 @@ export default function HomePage({ onNavigate }: Props) {
       <section className="relative overflow-hidden rounded-3xl border border-gray-200 bg-gradient-to-r from-cyan-50 via-blue-50 to-orange-50 shadow-sm">
         <div
           className="absolute inset-0 bg-cover bg-center opacity-10"
-          style={{ backgroundImage: "url('/craybitch without background.png')" }}
+          style={{ backgroundImage: "url('/crayvings background.png')" }}
         />
         <div className="absolute inset-0 bg-white/20" />
 
