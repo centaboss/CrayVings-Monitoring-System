@@ -151,8 +151,8 @@ export default function SensorsPage() {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4">
         {loading ? (
-          ["Temperature", "pH Level", "Water Level"].map((name, i) => (
-            <div key={i} className="rounded-xl border border-gray-200 bg-gray-50 p-3 md:p-4">
+          ["Temperature", "pH Level", "Water Level"].map((name) => (
+            <div key={name} className="rounded-xl border border-gray-200 bg-gray-50 p-3 md:p-4">
               <div className="text-xs font-semibold text-gray-400 uppercase mb-1">Loading...</div>
               <div className="text-xl md:text-2xl font-bold text-gray-400">--</div>
             </div>

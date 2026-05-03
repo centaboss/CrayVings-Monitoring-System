@@ -74,8 +74,19 @@ export default function UserManagementPage() {
   }, [showToast]);
 
   useEffect(() => {
-    loadUsers();
-  }, [loadUsers]);
+    const loadInitialUsers = async () => {
+      try {
+        const data = await fetchUsers();
+        setUsers(data);
+      } catch {
+        showToast("Failed to load users", "error");
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    void loadInitialUsers();
+  }, [showToast]);
 
   const validateForm = useCallback((): FormErrors => {
     try {

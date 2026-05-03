@@ -27,6 +27,15 @@ const THRESHOLD_COLORS: Record<string, { bg: string; border: string }> = {
   water_level: { bg: "bg-indigo-50", border: "border-indigo-100" },
 };
 
+const SETTINGS_FIELDS: Array<keyof SensorSettings> = [
+  "temp_min",
+  "temp_max",
+  "ph_min",
+  "ph_max",
+  "water_level_min",
+  "water_level_max",
+];
+
 function validateSetting(key: keyof SensorSettings, value: number): { valid: boolean; message?: string } {
   const bounds = SETTING_BOUNDS[key];
   if (!bounds) return { valid: true };
@@ -53,6 +62,16 @@ function validateRange(key: string, settingsToValidate: SensorSettings): { valid
   }
   
   return { valid: true };
+}
+
+function hasSettingsChanges(currentSettings: SensorSettings, nextSettings: SensorSettings): boolean {
+  return SETTINGS_FIELDS.some((field) => {
+    const currentValue = Number(currentSettings[field]);
+    const nextValue = Number(nextSettings[field]);
+    return !Number.isNaN(currentValue) && !Number.isNaN(nextValue)
+      ? currentValue !== nextValue
+      : currentSettings[field] !== nextSettings[field];
+  });
 }
 
 export default function SettingsPage() {
@@ -115,6 +134,11 @@ export default function SettingsPage() {
     
     if (Object.keys(validationErrors).length > 0) {
       setLocalSaveError("Please fix validation errors before saving");
+      return;
+    }
+
+    if (!hasSettingsChanges(settings ?? DEFAULT_SETTINGS, localSettings)) {
+      setLocalSettings(null);
       return;
     }
     

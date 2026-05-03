@@ -105,7 +105,7 @@ export default function HomePage({ onNavigate }: Props) {
   const getConnectionStatusDot = () => {
     if (loading) return "bg-blue-500 animate-pulse";
     if (error) return "bg-red-500";
-    if (connectionStatus === "connected") return "bg-emerald-500";
+    if (connectionStatus === "online") return "bg-emerald-500";
     if (connectionStatus === "connecting") return "bg-yellow-500 animate-pulse";
     return "bg-gray-400";
   };
@@ -160,7 +160,7 @@ export default function HomePage({ onNavigate }: Props) {
               {getStatusBadge()}
               <span className="inline-flex items-center gap-1.5 text-xs text-gray-500">
                 <span className={`w-2 h-2 rounded-full ${getConnectionStatusDot()}`} />
-                {connectionStatus === "connected" ? "Connected" : connectionStatus === "connecting" ? "Connecting..." : "Disconnected"}
+                {connectionStatus === "online" ? "Connected" : connectionStatus === "connecting" ? "Connecting..." : "Disconnected"}
               </span>
               {lastUpdate && !loading && (
                 <span className="text-xs text-gray-400">

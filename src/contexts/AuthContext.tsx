@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from "react";
+import { createContext, useContext, useState, useCallback, type ReactNode } from "react";
 import type { AuthUser } from "../types";
 import { loginUser } from "../api/client";
 
@@ -60,17 +60,13 @@ function setStoredUser(user: AuthUser | null) {
 }
 
 export function AuthProvider({ children }: AuthProviderProps) {
-  const [user, setUser] = useState<AuthUser | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
+  const [user, setUser] = useState<AuthUser | null>(() => {
     const savedUser = getStoredUser();
     const savedToken = getStoredToken();
-    if (savedUser && savedToken) {
-      setUser(savedUser);
-    }
-  }, []);
+    return savedUser && savedToken ? savedUser : null;
+  });
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const login = useCallback(async (username: string, password: string) => {
     setIsLoading(true);

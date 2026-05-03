@@ -154,6 +154,101 @@ const pool = new Pool({
   connectionTimeoutMillis: 2000,
 });
 
+function isPlainObject(value) {
+  return Object.prototype.toString.call(value) === "[object Object]";
+}
+
+function stableStringify(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(",")}]`;
+  }
+  if (isPlainObject(value)) {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function isNumericLike(value) {
+  return (
+    (typeof value === "number" && Number.isFinite(value)) ||
+    (typeof value === "string" && value.trim() !== "" && /^-?\d+(\.\d+)?$/.test(value.trim()))
+  );
+}
+
+function normalizeComparableValue(value) {
+  if (value === undefined || value === null) return null;
+  if (value instanceof Date) return value.toISOString();
+  if (isNumericLike(value)) return Number(value);
+  if (typeof value === "string") return value.trim();
+  if (isPlainObject(value) || Array.isArray(value)) return stableStringify(value);
+  return value;
+}
+
+function areValuesEqual(currentValue, newValue) {
+  const current = normalizeComparableValue(currentValue);
+  const next = normalizeComparableValue(newValue);
+
+  if (current === null || next === null) {
+    return current === next;
+  }
+  return Object.is(current, next);
+}
+
+function getChangedFields(currentRow, updates) {
+  const changed = {};
+
+  for (const [field, newValue] of Object.entries(updates)) {
+    const currentValue = currentRow ? currentRow[field] : undefined;
+    // Explicitly compare normalized values so null/undefined, numeric strings,
+    // Dates, arrays, and JSON-like objects do not create false database writes.
+    if (!areValuesEqual(currentValue, newValue)) {
+      changed[field] = newValue;
+    }
+  }
+
+  return changed;
+}
+
+function assertSafeIdentifier(identifier) {
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(identifier)) {
+    throw new Error(`Unsafe SQL identifier: ${identifier}`);
+  }
+}
+
+async function updateOnlyIfChanged(db, options) {
+  const {
+    table,
+    keyColumn,
+    keyValue,
+    currentRow,
+    updates,
+    touchUpdatedAt = false,
+    returning = "*",
+  } = options;
+  const changed = getChangedFields(currentRow, updates);
+  const changedFields = Object.keys(changed);
+
+  if (changedFields.length === 0) {
+    return { changed: false, row: currentRow, changedFields };
+  }
+
+  [table, keyColumn, ...changedFields].forEach(assertSafeIdentifier);
+  const setClauses = changedFields.map((field, index) => `${field} = $${index + 1}`);
+  if (touchUpdatedAt) {
+    setClauses.push("updated_at = NOW()");
+  }
+
+  const values = changedFields.map((field) => changed[field]);
+  values.push(keyValue);
+
+  const result = await db.query(
+    `UPDATE ${table} SET ${setClauses.join(", ")} WHERE ${keyColumn} = $${values.length} RETURNING ${returning}`,
+    values
+  );
+
+  return { changed: true, row: result.rows[0], changedFields };
+}
+
 app.get("/", (req, res) => {
   res.json({
     message: "Server running",
@@ -167,6 +262,37 @@ const sensorSchema = z.object({
   water_level: z.coerce.number().min(0).max(100),
   ph: z.coerce.number().min(0).max(14),
   timestamp: z.string().datetime().optional(),
+});
+
+const settingsSchema = z.object({
+  temp_min: z.coerce.number().min(-10).max(50),
+  temp_max: z.coerce.number().min(-10).max(50),
+  ph_min: z.coerce.number().min(0).max(14),
+  ph_max: z.coerce.number().min(0).max(14),
+  water_level_min: z.coerce.number().min(0).max(100),
+  water_level_max: z.coerce.number().min(0).max(100),
+}).refine((value) => value.temp_min < value.temp_max, {
+  message: "Temperature minimum must be lower than maximum",
+  path: ["temp_min"],
+}).refine((value) => value.ph_min < value.ph_max, {
+  message: "pH minimum must be lower than maximum",
+  path: ["ph_min"],
+}).refine((value) => value.water_level_min < value.water_level_max, {
+  message: "Water level minimum must be lower than maximum",
+  path: ["water_level_min"],
+});
+
+const recipientUpdateSchema = z.object({
+  name: z.string().min(1).max(100).optional(),
+  is_active: z.preprocess((value) => {
+    if (typeof value === "string") {
+      if (value.toLowerCase() === "true") return true;
+      if (value.toLowerCase() === "false") return false;
+    }
+    return value;
+  }, z.boolean().optional()),
+}).refine((value) => value.name !== undefined || value.is_active !== undefined, {
+  message: "At least one field is required",
 });
 
 app.get("/health", async (req, res) => {
@@ -211,20 +337,39 @@ app.post("/sensor", async (req, res) => {
     );
     const lastData = lastReading.rows[0];
 
-    const insertResult = await pool.query(
-      `INSERT INTO sensors (device_id, temperature, water_level, ph, timestamp)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING *`,
-      [
-        device_id,
-        Number(temperature ?? 0),
-        Number(water_level ?? 0),
-        Number(ph ?? 0),
-        timestamp ? new Date(timestamp) : new Date(),
-      ]
-    );
+    const incomingSensor = {
+      device_id,
+      temperature: Number(temperature ?? 0),
+      water_level: Number(water_level ?? 0),
+      ph: Number(ph ?? 0),
+      timestamp: timestamp ? new Date(timestamp) : new Date(),
+    };
+    const sensorChanges = getChangedFields(lastData, {
+      device_id: incomingSensor.device_id,
+      temperature: incomingSensor.temperature,
+      water_level: incomingSensor.water_level,
+      ph: incomingSensor.ph,
+    });
 
-    console.log(`[${new Date().toISOString()}] Sensor data saved:`, insertResult.rows[0]);
+    let savedSensor = lastData;
+    if (!lastData || Object.keys(sensorChanges).length > 0) {
+      const insertResult = await pool.query(
+        `INSERT INTO sensors (device_id, temperature, water_level, ph, timestamp)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING *`,
+        [
+          incomingSensor.device_id,
+          incomingSensor.temperature,
+          incomingSensor.water_level,
+          incomingSensor.ph,
+          incomingSensor.timestamp,
+        ]
+      );
+      savedSensor = insertResult.rows[0];
+      console.log(`[${new Date().toISOString()}] Sensor data saved:`, savedSensor);
+    } else {
+      console.log(`[${new Date().toISOString()}] No sensor change detected; skipping database insert`);
+    }
 
     const settingsResult = await pool.query("SELECT * FROM sensor_settings LIMIT 1");
     const settings = settingsResult.rows[0] || {
@@ -249,15 +394,22 @@ app.post("/sensor", async (req, res) => {
       if (sensor.val === 0 && sensor.key !== "Water Level") continue;
 
       const status = getThresholdStatus(sensor.val, sensor.min, sensor.max);
-      const last = lastAlertedState[sensor.key];
+      const last = lastAlertedState[sensor.key] || {};
       const lastTs = last.timestamp ? new Date(last.timestamp).getTime() : 0;
 
       if (status === "good") {
-        await pool.query(
-          `UPDATE last_alerts SET status = $1, value = $2, timestamp = $3 WHERE sensor_key = $4`,
-          ["good", sensor.val, now.toISOString(), sensor.key]
-        );
-        lastAlertedState[sensor.key] = { status: "good", value: sensor.val, timestamp: now.toISOString() };
+        const alertUpdates = { status: "good", value: sensor.val };
+        const alertChanges = getChangedFields(last, alertUpdates);
+        if (Object.keys(alertChanges).length > 0) {
+          await pool.query(
+            `INSERT INTO last_alerts (sensor_key, status, value, timestamp) VALUES ($1, $2, $3, $4)
+             ON CONFLICT (sensor_key) DO UPDATE SET status = $2, value = $3, timestamp = $4`,
+            [sensor.key, alertUpdates.status, alertUpdates.value, now.toISOString()]
+          );
+          lastAlertedState[sensor.key] = { ...alertUpdates, timestamp: now.toISOString() };
+        } else {
+          lastAlertedState[sensor.key] = { ...last, ...alertUpdates };
+        }
         continue;
       }
 
@@ -273,7 +425,7 @@ app.post("/sensor", async (req, res) => {
         ["Alert", sensor.key, direction, sensor.val]
       );
 
-      // Update last_alerts table
+      // Update last_alerts table only after an alert event is actually emitted.
       await pool.query(
         `INSERT INTO last_alerts (sensor_key, status, value, timestamp) VALUES ($1, $2, $3, $4)
          ON CONFLICT (sensor_key) DO UPDATE SET status = $2, value = $3, timestamp = $4`,
@@ -333,8 +485,9 @@ app.post("/sensor", async (req, res) => {
     }
 
     res.status(201).json({
-      message: "Saved to database",
-      data: insertResult.rows[0],
+      message: Object.keys(sensorChanges).length > 0 || !lastData ? "Saved to database" : "No sensor change detected",
+      saved: Object.keys(sensorChanges).length > 0 || !lastData,
+      data: savedSensor,
     });
   } catch (err) {
     console.error(`[${new Date().toISOString()}] Error saving sensor:`, err);
@@ -468,36 +621,60 @@ app.get("/settings", async (req, res) => {
 
 app.post("/settings", requireAdmin, async (req, res) => {
   try {
-    const {
-      temp_min,
-      temp_max,
-      ph_min,
-      ph_max,
-      water_level_min,
-      water_level_max,
-    } = req.body;
-    
-    const existing = await pool.query("SELECT id FROM sensor_settings LIMIT 1");
-    
-    let result;
-    if (existing.rows.length > 0) {
-      result = await pool.query(
-        `UPDATE sensor_settings SET 
-          temp_min = $1, temp_max = $2, ph_min = $3, ph_max = $4,
-          water_level_min = $5, water_level_max = $6
-         WHERE id = $7 RETURNING *`,
-        [temp_min, temp_max, ph_min, ph_max, water_level_min, water_level_max, existing.rows[0].id]
-      );
-    } else {
-      result = await pool.query(
-        `INSERT INTO sensor_settings (temp_min, temp_max, ph_min, ph_max, water_level_min, water_level_max)
-          VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-        [temp_min, temp_max, ph_min, ph_max, water_level_min, water_level_max]
-      );
+    const parsed = settingsSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        message: "Validation error",
+        errors: parsed.error.flatten().fieldErrors,
+      });
     }
 
-    console.log(`[${new Date().toISOString()}] Settings saved:`, result.rows[0]);
-    res.json({ message: "Settings saved", data: result.rows[0] });
+    const updates = parsed.data;
+    
+    const existing = await pool.query("SELECT * FROM sensor_settings LIMIT 1");
+    
+    let savedSettings;
+    let changed = true;
+    if (existing.rows.length > 0) {
+      const updateResult = await updateOnlyIfChanged(pool, {
+        table: "sensor_settings",
+        keyColumn: "id",
+        keyValue: existing.rows[0].id,
+        currentRow: existing.rows[0],
+        updates,
+        touchUpdatedAt: true,
+      });
+
+      if (updateResult.changed) {
+        savedSettings = updateResult.row;
+        console.log(`[${new Date().toISOString()}] Settings saved:`, savedSettings);
+      } else {
+        changed = false;
+        savedSettings = existing.rows[0];
+        console.log(`[${new Date().toISOString()}] No settings change detected; skipping database update`);
+      }
+    } else {
+      const result = await pool.query(
+        `INSERT INTO sensor_settings (temp_min, temp_max, ph_min, ph_max, water_level_min, water_level_max)
+          VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+        [
+          updates.temp_min,
+          updates.temp_max,
+          updates.ph_min,
+          updates.ph_max,
+          updates.water_level_min,
+          updates.water_level_max,
+        ]
+      );
+      savedSettings = result.rows[0];
+      console.log(`[${new Date().toISOString()}] Settings saved:`, savedSettings);
+    }
+
+    res.json({
+      message: changed ? "Settings saved" : "No settings change detected",
+      changed,
+      data: savedSettings,
+    });
   } catch (err) {
     console.error(`[${new Date().toISOString()}] Error saving settings:`, err);
     res.status(500).json({ message: "Error saving settings" });
@@ -712,16 +889,30 @@ app.put("/auth/users/:id/password", requireAdmin, async (req, res) => {
     const userId = parseInt(req.params.id);
     const { newPassword } = req.body;
 
+    if (!Number.isInteger(userId)) {
+      return res.status(400).json({ message: "Invalid user id" });
+    }
+
     if (!newPassword || newPassword.length < 8) {
       return res.status(400).json({ message: "Password must be at least 8 characters" });
     }
 
+    const existingUser = await pool.query("SELECT id, password_hash FROM users WHERE id = $1", [userId]);
+    if (existingUser.rows.length === 0) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    if (verifyPassword(newPassword, existingUser.rows[0].password_hash)) {
+      console.log(`[${new Date().toISOString()}] No password change detected for user ID ${userId}; skipping database update`);
+      return res.json({ message: "No password change detected", changed: false });
+    }
+
     const passwordHash = hashPassword(newPassword);
-    await pool.query("UPDATE users SET password_hash = $1 WHERE id = $2", [passwordHash, userId]);
+    await pool.query("UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2", [passwordHash, userId]);
 
     console.log(`[${new Date().toISOString()}] Password reset for user ID ${userId} by admin ${req.adminUser.username}`);
 
-    res.json({ message: "Password reset successfully" });
+    res.json({ message: "Password reset successfully", changed: true });
   } catch (err) {
     console.error(`[${new Date().toISOString()}] Error resetting password:`, err.message);
     res.status(500).json({ message: "Failed to reset password" });
@@ -751,7 +942,7 @@ app.delete("/auth/users/:id", requireAdmin, async (req, res) => {
 });
 
 // Recipient management endpoints
-app.get("/settings/recipients", async (req, res) => {
+app.get("/settings/recipients", requireAdmin, async (req, res) => {
   try {
     const result = await pool.query(
       "SELECT id, phone_number, name, is_active, created_at FROM authorized_recipients ORDER BY created_at DESC"
@@ -763,7 +954,7 @@ app.get("/settings/recipients", async (req, res) => {
   }
 });
 
-app.post("/settings/recipients", async (req, res) => {
+app.post("/settings/recipients", requireAdmin, async (req, res) => {
   try {
     const { phone_number, name } = req.body;
 
@@ -771,12 +962,30 @@ app.post("/settings/recipients", async (req, res) => {
       return res.status(400).json({ error: "Invalid Philippine phone number. Format: +639XXXXXXXX" });
     }
 
+    const existing = await pool.query(
+      "SELECT * FROM authorized_recipients WHERE phone_number = $1",
+      [phone_number]
+    );
+    if (existing.rows.length > 0) {
+      const updates = { name: name || "Recipient" };
+      const changes = getChangedFields(existing.rows[0], updates);
+      if (Object.keys(changes).length === 0) {
+        return res.json({
+          success: true,
+          message: "No recipient change detected",
+          changed: false,
+          data: existing.rows[0],
+        });
+      }
+      return res.status(409).json({ error: "Phone number already exists" });
+    }
+
     const result = await pool.query(
       "INSERT INTO authorized_recipients (phone_number, name) VALUES ($1, $2) RETURNING *",
       [phone_number, name || "Recipient"]
     );
 
-    res.status(201).json({ success: true, message: "Recipient added", data: result.rows[0] });
+    res.status(201).json({ success: true, message: "Recipient added", changed: true, data: result.rows[0] });
   } catch (err) {
     if (err.code === "23505") {
       return res.status(409).json({ error: "Phone number already exists" });
@@ -786,28 +995,47 @@ app.post("/settings/recipients", async (req, res) => {
   }
 });
 
-app.put("/settings/recipients/:id", async (req, res) => {
+app.put("/settings/recipients/:id", requireAdmin, async (req, res) => {
   try {
-    const { id } = req.params;
-    const { name, is_active } = req.body;
+    const id = parseInt(req.params.id);
+    if (!Number.isInteger(id)) {
+      return res.status(400).json({ error: "Invalid recipient id" });
+    }
 
-    const result = await pool.query(
-      "UPDATE authorized_recipients SET name = COALESCE($1, name), is_active = COALESCE($2, is_active), updated_at = NOW() WHERE id = $3 RETURNING *",
-      [name, is_active, id]
-    );
+    const parsed = recipientUpdateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: "Validation error",
+        errors: parsed.error.flatten().fieldErrors,
+      });
+    }
 
-    if (result.rows.length === 0) {
+    const existing = await pool.query("SELECT * FROM authorized_recipients WHERE id = $1", [id]);
+    if (existing.rows.length === 0) {
       return res.status(404).json({ error: "Recipient not found" });
     }
 
-    res.json({ success: true, message: "Recipient updated", data: result.rows[0] });
+    const updateResult = await updateOnlyIfChanged(pool, {
+      table: "authorized_recipients",
+      keyColumn: "id",
+      keyValue: id,
+      currentRow: existing.rows[0],
+      updates: parsed.data,
+      touchUpdatedAt: true,
+    });
+
+    if (updateResult.changed) {
+      res.json({ success: true, message: "Recipient updated", changed: true, data: updateResult.row });
+    } else {
+      res.json({ success: true, message: "No recipient change detected", changed: false, data: existing.rows[0] });
+    }
   } catch (err) {
     console.error(`[${new Date().toISOString()}] Error updating recipient:`, err);
     res.status(500).json({ error: "Failed to update recipient" });
   }
 });
 
-app.delete("/settings/recipients/:id", async (req, res) => {
+app.delete("/settings/recipients/:id", requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -827,7 +1055,7 @@ app.delete("/settings/recipients/:id", async (req, res) => {
   }
 });
 
-app.post("/settings/recipients/test/:id", async (req, res) => {
+app.post("/settings/recipients/test/:id", requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -853,7 +1081,7 @@ app.post("/settings/recipients/test/:id", async (req, res) => {
 });
 
 // SMS logs endpoint
-app.get("/settings/sms-logs", async (req, res) => {
+app.get("/settings/sms-logs", requireAdmin, async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
@@ -965,13 +1193,10 @@ async function startServer() {
         console.log(`[${new Date().toISOString()}] Default admin account created (username: admin, password: Admin@123)`);
       } else {
         const storedHash = adminExists.rows[0].password_hash;
-        if (!verifyPassword("Admin@123", storedHash)) {
-          console.log(`[${new Date().toISOString()}] Admin password mismatch detected. Resetting to default...`);
-          const adminPassword = hashPassword("Admin@123");
-          await client.query("UPDATE users SET password_hash = $1 WHERE username = 'admin'", [adminPassword]);
-          console.log(`[${new Date().toISOString()}] Admin password reset to default: Admin@123`);
-        } else {
+        if (verifyPassword("Admin@123", storedHash)) {
           console.log(`[${new Date().toISOString()}] Admin account verified (username: admin)`);
+        } else {
+          console.log(`[${new Date().toISOString()}] Admin account exists with a non-default password; skipping startup password update`);
         }
       }
 

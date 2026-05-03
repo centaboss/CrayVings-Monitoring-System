@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback } from "react";
 import { FileText, Download, Clock, Thermometer, Waves, FlaskConical } from "lucide-react";
 import { useSensors } from "../hooks/useSensors";
 import { jsPDF } from "jspdf";
-import "jspdf-autotable";
+import autoTable, { type HookData } from "jspdf-autotable";
 
 const PARAMETER_ICONS: Record<string, React.ReactNode> = {
   Temperature: <Thermometer size={14} className="text-blue-500" />,
@@ -79,7 +79,7 @@ export default function LogsPage() {
       log.action,
     ]);
 
-    (doc as any).autoTable({
+    autoTable(doc, {
       startY: tableStartY,
       head: [["Timestamp", "Parameter", "Old Value", "New Value", "Action"]],
       body: tableData,
@@ -105,9 +105,9 @@ export default function LogsPage() {
         4: { cellWidth: 35, halign: "center" },
       },
       margin: { left: 14, right: 14 },
-      didDrawPage: (data: { doc: jsPDF }) => {
-        const currentPage = (data.doc as any).internal.getNumberOfPages();
-        const totalPages = (data.doc as any).internal.pages.length;
+      didDrawPage: (data: HookData) => {
+        const currentPage = data.doc.getNumberOfPages();
+        const totalPages = data.doc.getNumberOfPages();
 
         data.doc.setFontSize(8);
         data.doc.setFont("helvetica", "normal");

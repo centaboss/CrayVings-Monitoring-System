@@ -36,8 +36,6 @@ export default function DashboardPage() {
     };
   }, [data, thresholds]);
 
-  const hasData = !!data && !loading;
-
   return (
     <>
       <div className="grid grid-cols-2 md:grid-cols-3 gap-2 md:gap-3 mb-4">
@@ -64,8 +62,8 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
         {loading ? (
           <>
-            {["Temperature", "Water Level", "pH Level"].map((title, i) => (
-              <div key={i} className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm flex items-center justify-center">
+            {["Temperature", "Water Level", "pH Level"].map((title) => (
+              <div key={title} className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm flex items-center justify-center">
                 <div className="text-xs text-gray-400">Loading chart...</div>
               </div>
             ))}
