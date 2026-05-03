@@ -98,7 +98,7 @@ function useSensorDataPolling(): SensorDataState & { refetch: () => void } {
     try {
       const [latest, historyData] = await Promise.all([
         fetchLatestSensor(abortControllerRef.current.signal),
-        fetchSensorHistory(300, abortControllerRef.current.signal),
+        fetchSensorHistory(1000, abortControllerRef.current.signal),
       ]);
 
       if (latest) {
@@ -305,7 +305,7 @@ function useLogsManager(): LogsState & { refetch: () => void; setPage: (page: nu
   }, []);
 
   useEffect(() => {
-    fetchData();
+    fetchData(state.logsPage);
     const interval = setInterval(() => fetchData(state.logsPage), LOGS_POLL_INTERVAL);
 
     return () => {
@@ -323,8 +323,7 @@ function useLogsManager(): LogsState & { refetch: () => void; setPage: (page: nu
 
   const setPage = useCallback((page: number) => {
     setState((prev) => ({ ...prev, logsPage: page }));
-    fetchData(page);
-  }, [fetchData]);
+  }, []);
 
   return useMemo(
     () => ({

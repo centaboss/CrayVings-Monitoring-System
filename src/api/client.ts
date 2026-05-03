@@ -63,7 +63,7 @@ export async function fetchLatestSensor(signal?: AbortSignal): Promise<SensorEnt
   }
 }
 
-export async function fetchSensorHistory(limit = 300, signal?: AbortSignal): Promise<ChartPoint[]> {
+export async function fetchSensorHistory(limit = 1000, signal?: AbortSignal): Promise<ChartPoint[]> {
   const response = await client.get<SensorEntry[]>("/sensor", {
     params: { limit },
     signal,
@@ -71,24 +71,23 @@ export async function fetchSensorHistory(limit = 300, signal?: AbortSignal): Pro
   
   const data = (response.data || [])
     .slice()
-    .reverse()
-    .map((item) => ({
-      name: item.timestamp
-        ? new Date(item.timestamp).toLocaleTimeString([], {
-            hour: "2-digit",
-            minute: "2-digit",
-          })
-        : "--:--",
-      timestamp: item.timestamp ? new Date(item.timestamp).toISOString() : "",
-      temperature: item.temperature ?? 0,
-      water_level: item.water_level ?? 0,
-      ph: item.ph ?? 0,
-    }));
-  
-  console.log(`[API] Fetched ${data.length} history records:`, {
-    first: data[0]?.timestamp,
-    last: data[data.length - 1]?.timestamp,
-  });
+    .sort((a, b) => {
+      const ta = new Date(a.timestamp || 0).getTime();
+      const tb = new Date(b.timestamp || 0).getTime();
+      return ta - tb;
+    })
+    .map((item) => {
+      const timestamp = item.timestamp ? new Date(item.timestamp) : null;
+      return {
+        name: timestamp
+          ? timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+          : "--:--",
+        timestamp: timestamp ? timestamp.toISOString() : "",
+        temperature: item.temperature ?? 0,
+        water_level: item.water_level ?? 0,
+        ph: item.ph ?? 0,
+      };
+    });
   
   return data;
 }

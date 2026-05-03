@@ -45,6 +45,7 @@ export default function ActivityLogsPage() {
 
   const [searchInput, setSearchInput] = useState(activitySearch);
   const [debounceTimer, setDebounceTimer] = useState<ReturnType<typeof setTimeout> | null>(null);
+  const [isChangingPage, setIsChangingPage] = useState(false);
 
   const handleSearchChange = useCallback((value: string) => {
     setSearchInput(value);
@@ -64,6 +65,18 @@ export default function ActivityLogsPage() {
   const handleSortChange = useCallback(() => {
     setActivitySortBy(activitySortBy === "newest" ? "oldest" : "newest");
   }, [setActivitySortBy, activitySortBy]);
+
+  const handlePageChange = useCallback(async (newPage: number) => {
+    const totalPages = activityLogsTotalPages || 1;
+    if (newPage < 1 || newPage > totalPages || newPage === activityLogsPage || isChangingPage) return;
+    setIsChangingPage(true);
+    try {
+      setActivityLogsPage(newPage);
+      await new Promise(resolve => setTimeout(resolve, 100));
+    } finally {
+      setIsChangingPage(false);
+    }
+  }, [activityLogsPage, activityLogsTotalPages, isChangingPage, setActivityLogsPage]);
 
   const startItem = (activityLogsPage - 1) * 20 + 1;
   const endItem = Math.min(activityLogsPage * 20, activityLogsTotal);
@@ -115,7 +128,7 @@ export default function ActivityLogsPage() {
             />
           </div>
         </form>
-
+ 
         <select
           value={activityActionFilter}
           onChange={(e) => setActivityActionFilter(e.target.value)}
@@ -206,24 +219,24 @@ export default function ActivityLogsPage() {
             </p>
             <div className="flex gap-1">
               <button
-                onClick={() => setActivityLogsPage(Math.max(1, activityLogsPage - 1))}
-                disabled={activityLogsPage <= 1}
-                className="flex items-center gap-1 px-3 py-1 text-sm border border-gray-200 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
-              >
-                <ChevronLeft size={14} />
-                Previous
-              </button>
-              <span className="px-3 py-1 text-sm text-gray-600">
-                Page {activityLogsPage} of {activityLogsTotalPages || 1}
-              </span>
-              <button
-                 onClick={() => setActivityLogsPage(Math.min(activityLogsTotalPages || 1, activityLogsPage + 1))}
-                 disabled={activityLogsPage >= (activityLogsTotalPages || 1)}
-                className="flex items-center gap-1 px-3 py-1 text-sm border border-gray-200 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
-              >
-                Next
-                <ChevronRight size={14} />
-              </button>
+                 onClick={() => handlePageChange(activityLogsPage - 1)}
+                 disabled={activityLogsPage <= 1 || activityLogsLoading || isChangingPage}
+                 className="flex items-center gap-1 px-3 py-1 text-sm border border-gray-200 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
+               >
+                 <ChevronLeft size={14} />
+                 Previous
+               </button>
+               <span className="px-3 py-1 text-sm text-gray-600">
+                 Page {activityLogsPage} of {activityLogsTotalPages || 1}
+               </span>
+               <button
+                 onClick={() => handlePageChange(activityLogsPage + 1)}
+                 disabled={activityLogsPage >= (activityLogsTotalPages || 1) || activityLogsLoading || isChangingPage}
+                 className="flex items-center gap-1 px-3 py-1 text-sm border border-gray-200 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
+               >
+                 Next
+                 <ChevronRight size={14} />
+               </button>
             </div>
           </div>
         </>

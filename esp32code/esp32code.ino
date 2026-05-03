@@ -17,11 +17,11 @@ WiFiMulti wifiMulti;
 
 const char* serverName = "http://192.168.1.20:3000/sensor";
 
-const float TANK_HEIGHT_CM = 30.0f;
+const float TANK_HEIGHT_CM = 36.0f;
 const int ULTRASONIC_SAMPLES = 5;
 const int SAMPLE_DELAY_MS = 50;
-const int LOOP_DELAY_MS = 1000;
-const int HTTP_TIMEOUT_MS = 5000;
+const int LOOP_DELAY_MS = 5000;
+const int HTTP_TIMEOUT_MS = 10000;
 const int WIFI_CONNECT_TIMEOUT_MS = 20000;
 
 const float PH_CALIBRATION_OFFSET = 19.77f;
@@ -176,18 +176,22 @@ void setup() {
   Serial.begin(19200);
 
   esp_task_wdt_deinit();
+  WiFi.setSleep(false);
 
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
   pinMode(PH_PIN, INPUT);
+  analogReadResolution(12);
+  analogSetPinAttenuation(PH_PIN, ADC_11db);
   sensors.begin();
 
   // =============================================
   // ADD YOUR WIFI NETWORKS HERE
   // Format: wifiMulti.addAP("SSID", "password");
   // =============================================
-  wifiMulti.addAP("AIRLINK_MADUCDOC-2.4G", "64j91g6d");
-  wifiMulti.addAP("BULACLAC-ASUS",         "1557STzone2");
+  
+   wifiMulti.addAP("BULACLAC-ASUS", "1557STzone2");
+ 
   // Add more networks as needed
 
   esp_task_wdt_config_t wdt_config = {
@@ -247,11 +251,15 @@ void loop() {
     int code = http.POST(json);
 
     if (code > 0) {
+      String response = http.getString();
       if (code == 200 || code == 201) {
-        Serial.println("Data successfully saved to database!");
+        Serial.print("Server accepted data: ");
+        Serial.println(response);
       } else {
         Serial.print("Server responded with code: ");
         Serial.println(code);
+        Serial.print("Server response: ");
+        Serial.println(response);
       }
     } else {
       Serial.print("POST failed, error: ");

@@ -10,8 +10,6 @@ import {
   Settings,
   FileText,
   ClipboardList,
-  LogOut,
-  Users,
 } from "lucide-react";
 import logo from "./assets/craybitch without background.png";
 import type { MenuKey } from "./types";
@@ -25,7 +23,6 @@ import HistoricalDataPage from "./pages/HistoricalDataPage";
 import SettingsPage from "./pages/SettingsPage";
 import LogsPage from "./pages/LogsPage";
 import ActivityLogsPage from "./pages/ActivityLogsPage";
-import UserManagementPage from "./pages/UserManagementPage";
 import AuthPage from "./pages/AuthPage";
 import { SensorProvider } from "./contexts/SensorProvider";
 import { useActivityLogs } from "./contexts/SensorContext";
@@ -42,11 +39,6 @@ const baseMenuItems: { label: MenuKey; icon: React.ReactNode }[] = [
   { label: "Activity Logs", icon: <ClipboardList size={18} /> },
   { label: "Logs", icon: <FileText size={18} /> },
   { label: "Settings", icon: <Settings size={18} /> },
-];
-
-const adminMenuItems: { label: MenuKey; icon: React.ReactNode }[] = [
-  ...baseMenuItems,
-  { label: "User Management", icon: <Users size={18} /> },
 ];
 
 function getInitialMenuDefault(): MenuKey {
@@ -67,8 +59,8 @@ function DashboardLayout() {
   useThresholdAlert();
 
   const menuItems = useMemo(
-    () => (user?.role === "admin" ? adminMenuItems : baseMenuItems),
-    [user?.role]
+    () => baseMenuItems,
+    []
   );
 
   const handleNavigate = useCallback((menu: MenuKey) => {
@@ -97,11 +89,9 @@ function DashboardLayout() {
         return <ActivityLogsPage />;
       case "Logs":
         return <LogsPage />;
-      case "Settings":
-        return <SettingsPage />;
-      case "User Management":
-        return <UserManagementPage />;
-      default:
+       case "Settings":
+         return <SettingsPage />;
+       default:
         return <HomePage onNavigate={handleNavigate} />;
     }
   }, [activeMenu, handleNavigate]);
@@ -156,19 +146,6 @@ function DashboardLayout() {
               </button>
             );
           })}
-        </div>
-
-        <div className="mt-auto w-full px-2 pb-4">
-          <button
-            onClick={() => {
-              logActivity("logout", `${user.name} logged out`, "Auth");
-              logout();
-            }}
-            className="flex flex-col items-center justify-center gap-1 py-2.5 px-1 rounded-lg text-[10px] font-semibold text-center cursor-pointer border-none w-full transition-colors text-red-500 hover:bg-red-50"
-          >
-            <LogOut size={18} />
-            <span className="leading-tight">Logout</span>
-          </button>
         </div>
       </div>
 

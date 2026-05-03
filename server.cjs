@@ -71,7 +71,7 @@ const SMS_CONFIG = {
   // Units for each sensor type
   units: {
     "Temperature": "°C",
-    "pH Level": "",
+    "pH Level": "pH",
     "Water Level": "%"
   },
 
@@ -117,9 +117,9 @@ function buildMessage(template, data) {
 // Helper: Convert status to human-readable text with emoji
 function getStatusText(status) {
   switch (status) {
-    case 'good': return '✅ Good';
-    case 'warning': return '⚠️ Warning';
-    case 'critical': return '🚨 Critical';
+    case 'good': return ' Good';
+    case 'warning': return ' Warning';
+    case 'critical': return ' Critical';
     default: return 'Unknown';
   }
 }
@@ -391,6 +391,12 @@ app.get("/health", async (req, res) => {
 
 app.post("/sensor", async (req, res) => {
   try {
+    console.log(`[${new Date().toISOString()}] /sensor POST received:`, JSON.stringify(req.body));
+    
+    if (!req.body || Object.keys(req.body).length === 0) {
+      return res.status(400).json({ message: "Empty request body" });
+    }
+
     const result = sensorSchema.safeParse(req.body);
     
     if (!result.success) {
@@ -409,58 +415,69 @@ app.post("/sensor", async (req, res) => {
     } = result.data;
 
     const lastReading = await pool.query(
-      "SELECT * FROM sensors ORDER BY timestamp DESC LIMIT 1"
-    );
-    const lastData = lastReading.rows[0];
+       "SELECT * FROM sensors ORDER BY timestamp DESC LIMIT 1"
+     );
+     const lastData = lastReading.rows[0] || null;
 
-    const incomingSensor = {
-      device_id,
-      temperature: Number(temperature ?? 0),
-      water_level: Number(water_level ?? 0),
-      ph: Number(ph ?? 0),
-      timestamp: timestamp ? new Date(timestamp) : new Date(),
-    };
-    const sensorChanges = getChangedFields(lastData, {
-      device_id: incomingSensor.device_id,
-      temperature: incomingSensor.temperature,
-      water_level: incomingSensor.water_level,
-      ph: incomingSensor.ph,
-    });
+     const ts = timestamp ? new Date(timestamp) : new Date();
+     const incomingSensor = {
+       device_id,
+       temperature: Number(temperature ?? 0),
+       water_level: Number(water_level ?? 0),
+       ph: Number(ph ?? 0),
+       timestamp: ts,
+     };
 
-    let savedSensor = lastData;
-    if (!lastData || Object.keys(sensorChanges).length > 0) {
-      const insertResult = await pool.query(
-        `INSERT INTO sensors (device_id, temperature, water_level, ph, timestamp)
-         VALUES ($1, $2, $3, $4, $5)
-         RETURNING *`,
-        [
-          incomingSensor.device_id,
-          incomingSensor.temperature,
-          incomingSensor.water_level,
-          incomingSensor.ph,
-          incomingSensor.timestamp,
-        ]
-      );
-      savedSensor = insertResult.rows[0];
-      console.log(`[${new Date().toISOString()}] Sensor data saved:`, savedSensor);
-    } else {
-      console.log(`[${new Date().toISOString()}] No sensor change detected; skipping database insert`);
-    }
+     const sensorChanges = getChangedFields(lastData || {}, {
+       device_id: incomingSensor.device_id,
+       temperature: incomingSensor.temperature,
+       water_level: incomingSensor.water_level,
+       ph: incomingSensor.ph,
+     });
 
-    const settingsResult = await pool.query("SELECT * FROM sensor_settings LIMIT 1");
-    const settings = settingsResult.rows[0] || {
-      temp_min: 20.0, temp_max: 31.0,
-      ph_min: 6.5, ph_max: 8.5,
-      water_level_min: 10.0, water_level_max: 100.0,
-    };
+     let savedSensor = lastData;
+     if (!lastData || Object.keys(sensorChanges).length > 0) {
+       const insertResult = await pool.query(
+         `INSERT INTO sensors (device_id, temperature, water_level, ph, timestamp)
+          VALUES ($1, $2, $3, $4, $5)
+          RETURNING *`,
+         [
+           incomingSensor.device_id,
+           incomingSensor.temperature,
+           incomingSensor.water_level,
+           incomingSensor.ph,
+           incomingSensor.timestamp,
+         ]
+       );
+       savedSensor = insertResult.rows[0];
+       console.log(`[${new Date().toISOString()}] Sensor data saved:`, savedSensor);
+     } else {
+       console.log(`[${new Date().toISOString()}] No sensor change detected; skipping database insert`);
+     }
+
+     const settingsResult = await pool.query("SELECT * FROM sensor_settings LIMIT 1");
+     const settings = settingsResult.rows[0] || {
+       temp_min: 20.0, temp_max: 31.0,
+       ph_min: 6.5, ph_max: 8.5,
+       water_level_min: 10.0, water_level_max: 100.0,
+     };
 
     const now = new Date();
     const nowTs = now.getTime();
 
-    // Get the latest sensor reading for hourly update (if needed)
-    const latestSensorResult = lastData || await pool.query(
-      "SELECT * FROM sensors ORDER BY timestamp DESC, id DESC LIMIT 1"
-    ).then(r => r.rows[0]);
+    // Get the latest sensor reading for hourly update (use saved data or fetch)
+    let latestSensorResult = savedSensor || lastData;
+    if (!latestSensorResult) {
+      try {
+        const queryResult = await pool.query(
+          "SELECT * FROM sensors ORDER BY timestamp DESC, id DESC LIMIT 1"
+        );
+        latestSensorResult = queryResult.rows[0] || { temperature: 0, ph: 0, water_level: 0 };
+      } catch (dbErr) {
+        console.error(`[${new Date().toISOString()}] Error fetching latest sensor:`, dbErr.message);
+        latestSensorResult = { temperature: 0, ph: 0, water_level: 0 };
+      }
+    }
 
     // Check if it's time for hourly update
     const hourlyEnabled = SMS_CONFIG.hourly.enabled;
@@ -648,15 +665,17 @@ app.post("/sensor", async (req, res) => {
     }
 
     res.status(201).json({
-      message: Object.keys(sensorChanges).length > 0 || !lastData ? "Saved to database" : "No sensor change detected",
-      saved: Object.keys(sensorChanges).length > 0 || !lastData,
-      data: savedSensor,
-    });
+       message: Object.keys(sensorChanges).length > 0 || !lastData ? "Saved to database" : "No sensor change detected",
+       saved: Object.keys(sensorChanges).length > 0 || !lastData,
+       data: savedSensor || lastData || incomingSensor,
+     });
   } catch (err) {
-    console.error(`[${new Date().toISOString()}] Error saving sensor:`, err);
+    console.error(`[${new Date().toISOString()}] Error saving sensor:`, err.message);
+    console.error(`[${new Date().toISOString()}] Stack trace:`, err.stack);
     res.status(500).json({
       message: "Error saving data",
       error: err.message,
+      details: process.env.NODE_ENV === 'development' ? err.stack : undefined
     });
   }
 });

@@ -3,11 +3,15 @@ import { FileText, Download, Clock, Thermometer, Waves, FlaskConical } from "luc
 import { useSensors } from "../hooks/useSensors";
 import { jsPDF } from "jspdf";
 import autoTable, { type HookData } from "jspdf-autotable";
+import { SENSOR_KEY_TO_DISPLAY } from "../types";
 
 const PARAMETER_ICONS: Record<string, React.ReactNode> = {
   Temperature: <Thermometer size={14} className="text-blue-500" />,
   "pH Level": <FlaskConical size={14} className="text-emerald-500" />,
   "Water Level": <Waves size={14} className="text-indigo-500" />,
+  temperature: <Thermometer size={14} className="text-blue-500" />,
+  ph: <FlaskConical size={14} className="text-emerald-500" />,
+  water_level: <Waves size={14} className="text-indigo-500" />,
 };
 
 const PARAMETERS = ["all", "Temperature", "pH Level", "Water Level"] as const;
@@ -16,15 +20,39 @@ type ParameterFilter = typeof PARAMETERS[number];
 export default function LogsPage() {
   const { logs, logsLoading, logsError, refetchLogs, logsPage, logsTotal, setLogsPage } = useSensors();
   const [filter, setFilter] = useState<ParameterFilter>("all");
+  const [isChangingPage, setIsChangingPage] = useState(false);
+
+  const getDisplayParameter = (param: string): string => {
+    return SENSOR_KEY_TO_DISPLAY[param] ?? param;
+  };
 
   const filteredLogs = useMemo(
-    () => (filter === "all" ? logs : logs.filter((log) => log.parameter === filter)),
+    () => logs.filter((log) => {
+      if (filter === "all") return true;
+      const displayParam = getDisplayParameter(log.parameter);
+      return displayParam === filter || log.parameter === filter;
+    }),
     [logs, filter]
   );
 
-  const totalPages = useMemo(() => Math.ceil(logsTotal / 20), [logsTotal]);
+  const totalPages = useMemo(() => {
+    const total = Number(logsTotal) || 0;
+    return total > 0 ? Math.ceil(total / 20) : 1;
+  }, [logsTotal]);
+
   const startItem = useMemo(() => ((logsPage - 1) * 20) + 1, [logsPage]);
-  const endItem = useMemo(() => Math.min(logsPage * 20, logsTotal), [logsPage, logsTotal]);
+  const endItem = useMemo(() => Math.min(logsPage * 20, logsTotal || 0), [logsPage, logsTotal]);
+
+  const handlePageChange = useCallback(async (newPage: number) => {
+    if (newPage < 1 || newPage > totalPages || newPage === logsPage || isChangingPage) return;
+    setIsChangingPage(true);
+    try {
+      setLogsPage(newPage);
+      await new Promise(resolve => setTimeout(resolve, 100));
+    } finally {
+      setIsChangingPage(false);
+    }
+  }, [logsPage, totalPages, isChangingPage, setLogsPage]);
 
   const handleExport = useCallback(() => {
     if (filteredLogs.length === 0) {
@@ -45,11 +73,12 @@ export default function LogsPage() {
     doc.text(`Generated on ${new Date().toLocaleString()}`, pageWidth / 2, 28, { align: "center" });
 
   const parameterCounts = filteredLogs.reduce<Record<string, number>>((acc, log) => {
-    if (["Temperature", "pH Level", "Water Level"].includes(log.parameter)) {
-      acc[log.parameter] = (acc[log.parameter] || 0) + 1;
+    const displayParam = getDisplayParameter(log.parameter);
+    if (["Temperature", "pH Level", "Water Level"].includes(displayParam)) {
+      acc[displayParam] = (acc[displayParam] || 0) + 1;
     }
     return acc;
-  }, { Temperature: 0, "pH Level": 0, "Water Level": 0 });
+  }, { Temperature: 0, "pH Level":0, "Water Level":0 });
 
     const summaryY = 34;
     doc.setFontSize(11);
@@ -70,10 +99,13 @@ export default function LogsPage() {
     const tableStartY = summaryLineY + 8;
 
   const tableData = filteredLogs
-    .filter((log) => ["Temperature", "pH Level", "Water Level"].includes(log.parameter))
+    .filter((log) => {
+      const displayParam = getDisplayParameter(log.parameter);
+      return ["Temperature", "pH Level", "Water Level"].includes(displayParam);
+    })
     .map((log) => [
       log.timestamp ? new Date(log.timestamp).toLocaleString() : "-",
-      log.parameter,
+      getDisplayParameter(log.parameter),
       String(log.old_value),
       String(log.new_value),
       log.action,
@@ -286,19 +318,19 @@ export default function LogsPage() {
         </p>
         <div className="flex gap-1">
           <button
-            onClick={() => setLogsPage(Math.max(1, logsPage - 1))}
-            disabled={logsPage <= 1}
-            className="px-3 py-1 text-sm border border-gray-200 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
+            onClick={() => handlePageChange(logsPage - 1)}
+            disabled={logsPage <= 1 || logsLoading || isChangingPage}
+            className="px-3 py-1 text-sm border border-gray-200 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 flex items-center gap-1"
           >
             Previous
           </button>
           <span className="px-3 py-1 text-sm text-gray-600">
-            Page {logsPage} of {totalPages || 1}
+            Page {logsPage} of {totalPages}
           </span>
           <button
-            onClick={() => setLogsPage(Math.min(totalPages, logsPage + 1))}
-            disabled={logsPage >= totalPages}
-            className="px-3 py-1 text-sm border border-gray-200 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
+            onClick={() => handlePageChange(logsPage + 1)}
+            disabled={logsPage >= totalPages || logsLoading || isChangingPage}
+            className="px-3 py-1 text-sm border border-gray-200 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 flex items-center gap-1"
           >
             Next
           </button>

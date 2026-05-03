@@ -24,7 +24,6 @@ export const VALID_MENU_KEYS = [
   "Activity Logs",
   "Settings",
   "Logs",
-  "User Management",
 ] as const;
 
 export type MenuKey = typeof VALID_MENU_KEYS[number];
@@ -156,6 +155,18 @@ export function getApiBase(): string {
   }
   return DEFAULT_API_BASE;
 }
+
+export const SENSOR_KEY_TO_DISPLAY: Record<string, string> = {
+  temperature: "Temperature",
+  ph: "pH Level",
+  water_level: "Water Level",
+};
+
+export const DISPLAY_TO_SENSOR_KEY: Record<string, string> = {
+  "Temperature": "temperature",
+  "pH Level": "ph",
+  "Water Level": "water_level",
+};
 
 export const API_BASE = getApiBase();
 

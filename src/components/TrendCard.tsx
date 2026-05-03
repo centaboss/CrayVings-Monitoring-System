@@ -16,23 +16,56 @@ type Props = {
   stroke: string;
 };
 
-export default function TrendCard({ title, data, dataKey, stroke }: Props) {
+function CustomTooltip(props: {
+  active?: boolean;
+  payload?: Array<{ value: number }>;
+  label?: string;
+}) {
+  const { active, payload, label } = props;
+  if (!active || !payload?.length) return null;
+  const value = payload[0]?.value;
   return (
-    <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
-      <div className="text-sm font-bold text-gray-500 mb-2.5 text-center">{title}</div>
+    <div className="bg-white border border-gray-200 rounded-lg p-2 shadow-sm text-xs">
+      <p className="text-gray-500">{label}</p>
+      <p className="font-semibold text-gray-800">{typeof value === "number" ? value.toFixed(1) : value}</p>
+    </div>
+  );
+}
 
-      <ResponsiveContainer width="100%" height={170}>
+export default function TrendCard({ title, data, dataKey, stroke }: Props) {
+  const isLargeDataset = data.length > 50;
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm hover:shadow-md transition">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-bold text-gray-700">{title}</h3>
+        <span className="text-xs text-gray-400">{data.length} points</span>
+      </div>
+
+      <ResponsiveContainer width="100%" height={180}>
         <LineChart data={data}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#ececec" />
-          <XAxis dataKey="name" tick={{ fontSize: 10 }} />
-          <YAxis tick={{ fontSize: 10 }} />
-          <Tooltip />
+          <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+          <XAxis
+            dataKey="name"
+            tick={{ fontSize: 10, fill: "#9ca3af" }}
+            interval={isLargeDataset ? Math.floor(data.length / 6) : 0}
+            tickLine={false}
+            axisLine={{ stroke: "#e5e7eb" }}
+          />
+          <YAxis
+            tick={{ fontSize: 10, fill: "#9ca3af" }}
+            tickLine={false}
+            axisLine={{ stroke: "#e5e7eb" }}
+            width={40}
+          />
+          <Tooltip content={<CustomTooltip />} />
           <Line
             type="monotone"
             dataKey={dataKey}
             stroke={stroke}
             strokeWidth={2}
             dot={false}
+            activeDot={{ r: 4, fill: stroke }}
           />
         </LineChart>
       </ResponsiveContainer>
