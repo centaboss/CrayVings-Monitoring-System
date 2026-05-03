@@ -12,7 +12,6 @@ const ACTION_TYPE_COLORS: Record<string, string> = {
   device_disconnect: "bg-red-100 text-red-700",
   system_event: "bg-gray-100 text-gray-700",
   login: "bg-cyan-100 text-cyan-700",
-  logout: "bg-slate-100 text-slate-700",
 };
 
 const ACTION_TYPE_ICONS: Record<string, React.ReactNode> = {
@@ -24,7 +23,6 @@ const ACTION_TYPE_ICONS: Record<string, React.ReactNode> = {
   device_disconnect: "⏏",
   system_event: "",
   login: "",
-  logout: "",
 };
 
 export default function ActivityLogsPage() {

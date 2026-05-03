@@ -24,85 +24,161 @@ function getThresholdStatus(value, min, max) {
   return "good";
 }
 
-// SkySMS API helpers
+// =============================================================================
+// SkySMS API Configuration & Helpers
+// =============================================================================
 const SKYSMS_API_KEY = process.env.SKYSMS_API_KEY;
 const SKYSMS_API_URL = process.env.SKYSMS_API_URL || "https://skysms.skyio.site/api/v1";
 
-async function sendSingleSMS(phoneNumber, message) {
-  const maxRetries = 1;
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      if (!SKYSMS_API_KEY || !SKYSMS_API_URL) {
-        console.error("SkySMS configuration missing in .env");
-        await logSMS(phoneNumber, message, "failed", "Missing SkySMS config", null);
-        return;
-      }
-      const response = await axios.post(
-        `${SKYSMS_API_URL}/sms/send`,
-        { phone_number: phoneNumber, message, from: "CRAYVINGS" },
-        {
-          headers: {
-            "X-API-Key": SKYSMS_API_KEY,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-      console.log(`✅ SMS sent to ${phoneNumber}`);
-      await logSMS(phoneNumber, message, "sent", null, response.data?.id);
-      return response.data;
-    } catch (error) {
-      console.error(`❌ Failed to send SMS to ${phoneNumber} (attempt ${attempt + 1}/${maxRetries + 1}):`, error.message);
-      if (attempt === maxRetries) {
-        await logSMS(phoneNumber, message, "failed", error.message, null);
-        return;
-      }
-      await new Promise(resolve => setTimeout(resolve, 2000 * Math.pow(2, attempt)));
-    }
+// =============================================================================
+// SMS CONFIGURATION - Easy to customize all SMS messages and settings
+// =============================================================================
+const SMS_CONFIG = {
+  // Message templates - Use {{PLACEHOLDER}} for dynamic values
+  messages: {
+    // Warning alert message (sent when value is slightly out of range)
+    warning: "⚠️ {{SENSOR}} WARNING\n" +
+             "Recipient: {{NAME}}\n" +
+             "Reading: {{VALUE}}{{UNIT}}\n" +
+             "Threshold: {{THRESHOLD}}{{UNIT}}\n" +
+             "Time: {{TIME}}\n" +
+             "Status: Warning - Please check soon",
+
+    // Critical alert message (sent when value is 15%+ outside range)
+    critical: "🚨 {{SENSOR}} CRITICAL ALERT\n" +
+              "Recipient: {{NAME}}\n" +
+              "Reading: {{VALUE}}{{UNIT}}\n" +
+              "Threshold: {{THRESHOLD}}{{UNIT}}\n" +
+              "Time: {{TIME}}\n" +
+              "Status: CRITICAL - Immediate action required!",
+
+    // Hourly status update message (sent every hour regardless of alerts)
+    hourlyUpdate: "📊 CRAYVINGS HOURLY UPDATE\n" +
+                  "Time: {{TIME}}\n" +
+                  "Temperature: {{TEMP}}°C ({{TEMP_STATUS}})\n" +
+                  "pH Level: {{PH}} ({{PH_STATUS}})\n" +
+                  "Water Level: {{WATER}}% ({{WATER_STATUS}})\n" +
+                  "{{SUMMARY}}"
+  },
+
+  // Sensor display names (what appears in SMS messages)
+  sensorNames: {
+    "Temperature": "TEMPERATURE",
+    "pH Level": "PH LEVEL",
+    "Water Level": "WATER LEVEL"
+  },
+
+  // Units for each sensor type
+  units: {
+    "Temperature": "°C",
+    "pH Level": "",
+    "Water Level": "%"
+  },
+
+  // Hourly update settings
+  hourly: {
+    // Set to 'false' in .env (HOURLY_SMS_ENABLED=false) to disable
+    enabled: process.env.HOURLY_SMS_ENABLED !== 'false',
+    // How often to send hourly updates (default: 1 hour = 3600000 ms)
+    intervalMs: process.env.HOURLY_SMS_INTERVAL_MS
+      ? parseInt(process.env.HOURLY_SMS_INTERVAL_MS)
+      : 60 * 60 * 1000
+  },
+
+  // Cooldown between repeated alerts (milliseconds)
+  cooldown: {
+    warning: process.env.WARNING_SMS_COOLDOWN_MS
+      ? parseInt(process.env.WARNING_SMS_COOLDOWN_MS)
+      : 60 * 60 * 1000,  // 1 hour between warning SMS
+    critical: process.env.SMS_COOLDOWN_MS
+      ? parseInt(process.env.SMS_COOLDOWN_MS)
+      : 5 * 60 * 1000      // 5 minutes between critical SMS
+  },
+
+  // Retry settings for failed SMS
+  retry: {
+    maxRetries: 2,           // Up to 2 retries (3 total attempts)
+    baseDelayMs: 2000         // Base delay: 2s, 4s, 8s (exponential backoff)
+  },
+
+  // SMS sender name
+  from: "CRAYVINGS"
+};
+
+// Helper: Replace {{PLACEHOLDER}} in message templates with actual values
+function buildMessage(template, data) {
+  let message = template;
+  for (const [key, value] of Object.entries(data)) {
+    message = message.replace(new RegExp(`{{${key}}}`, 'g'), String(value));
+  }
+  return message;
+}
+
+// Helper: Convert status to human-readable text with emoji
+function getStatusText(status) {
+  switch (status) {
+    case 'good': return '✅ Good';
+    case 'warning': return '⚠️ Warning';
+    case 'critical': return '🚨 Critical';
+    default: return 'Unknown';
   }
 }
 
-async function sendBulkSMS(phoneNumbers, message) {
-  const maxRetries = 1;
+// =============================================================================
+// Improved SMS Sending with Better Reliability
+// =============================================================================
+async function sendSingleSMS(phoneNumber, message) {
+  const { maxRetries, baseDelayMs } = SMS_CONFIG.retry;
+
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
+      // Check if SkySMS is configured
       if (!SKYSMS_API_KEY || !SKYSMS_API_URL) {
         console.error("SkySMS configuration missing in .env");
-        for (const phone of phoneNumbers) {
-          await logSMS(phone, message, "failed", "Missing SkySMS config", null);
-        }
-        return;
+        await logSMS(phoneNumber, message, "failed", "Missing SkySMS config", null);
+        return false;
       }
-      if (phoneNumbers.length === 0) return;
+
       const response = await axios.post(
-        `${SKYSMS_API_URL}/sms/send-bulk`,
+        `${SKYSMS_API_URL}/sms/send`,
         {
-          recipients: phoneNumbers.map((phone) => ({ phone_number: phone })),
+          phone_number: phoneNumber,
           message,
-          from: "CRAYVINGS"
+          from: SMS_CONFIG.from
         },
         {
           headers: {
             "X-API-Key": SKYSMS_API_KEY,
             "Content-Type": "application/json",
           },
+          timeout: 10000 // 10 second timeout per request
         }
       );
-      console.log(`✅ Bulk SMS sent to ${phoneNumbers.length} recipients`);
-      for (const phone of phoneNumbers) {
-        await logSMS(phone, message, "sent", null, response.data?.id);
-      }
-      return response.data;
+
+      console.log(`✅ SMS sent to ${phoneNumber} (attempt ${attempt + 1})`);
+      await logSMS(phoneNumber, message, "sent", null, response.data?.id);
+      return true;
+
     } catch (error) {
-      console.error(`❌ Failed to send bulk SMS (attempt ${attempt + 1}/${maxRetries + 1}):`, error.message);
-      if (attempt === maxRetries) {
-        for (const phone of phoneNumbers) {
-          await logSMS(phone, message, "failed", error.message, null);
-        }
-        return;
+      const isLastAttempt = attempt === maxRetries;
+      const errorMessage = error.response?.data?.message || error.message;
+
+      console.error(
+        `❌ Failed to send SMS to ${phoneNumber} (attempt ${attempt + 1}/${maxRetries + 1}):`,
+        errorMessage
+      );
+
+      if (isLastAttempt) {
+        await logSMS(phoneNumber, message, "failed", errorMessage, null);
+        return false;
       }
-      await new Promise(resolve => setTimeout(resolve, 2000 * Math.pow(2, attempt)));
+
+      // Exponential backoff: 2s, 4s, 8s...
+      const delay = baseDelayMs * Math.pow(2, attempt);
+      await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
+  return false;
 }
 
 async function logSMS(phone, message, status, error, smsId = null) {
@@ -381,14 +457,27 @@ app.post("/sensor", async (req, res) => {
     const now = new Date();
     const nowTs = now.getTime();
 
-    const CRITICAL_INTERVAL_MS = process.env.SMS_COOLDOWN_MS ? parseInt(process.env.SMS_COOLDOWN_MS) : 5 * 60 * 1000;
-    const WARNING_INTERVAL_MS = 60 * 60 * 1000;
+    // Get the latest sensor reading for hourly update (if needed)
+    const latestSensorResult = lastData || await pool.query(
+      "SELECT * FROM sensors ORDER BY timestamp DESC, id DESC LIMIT 1"
+    ).then(r => r.rows[0]);
+
+    // Check if it's time for hourly update
+    const hourlyEnabled = SMS_CONFIG.hourly.enabled;
+    if (hourlyEnabled && !global.lastHourlyUpdateTs) {
+      global.lastHourlyUpdateTs = 0; // Initialize on first run
+    }
+    const shouldSendHourly = hourlyEnabled &&
+      (!global.lastHourlyUpdateTs || nowTs - global.lastHourlyUpdateTs >= SMS_CONFIG.hourly.intervalMs);
 
     const sensorChecks = [
       { key: "Temperature", val: Number(temperature), min: settings.temp_min, max: settings.temp_max },
       { key: "pH Level", val: Number(ph), min: settings.ph_min, max: settings.ph_max },
       { key: "Water Level", val: Number(water_level), min: settings.water_level_min, max: settings.water_level_max },
     ];
+
+    // Track which sensors triggered alerts in this cycle (to avoid duplicate SMS)
+    const alertedThisCycle = new Set();
 
     for (const sensor of sensorChecks) {
       if (sensor.val === 0 && sensor.key !== "Water Level") continue;
@@ -413,8 +502,12 @@ app.post("/sensor", async (req, res) => {
         continue;
       }
 
-      const interval = status === "critical" ? CRITICAL_INTERVAL_MS : WARNING_INTERVAL_MS;
+      // Use appropriate cooldown based on alert severity
+      const interval = status === "critical"
+        ? SMS_CONFIG.cooldown.critical
+        : SMS_CONFIG.cooldown.warning;
 
+      // Skip if same status and still in cooldown period
       if (status === last.status && nowTs - lastTs < interval) {
         continue;
       }
@@ -434,8 +527,11 @@ app.post("/sensor", async (req, res) => {
       lastAlertedState[sensor.key] = { status, value: sensor.val, timestamp: now.toISOString() };
       console.log(`[${now.toISOString()}] Alert logged: ${sensor.key} ${direction} (value: ${sensor.val}, status: ${status})`);
 
-      // Only send SMS for critical alerts
-      if (status === "critical") {
+      // Send SMS for BOTH warning AND critical alerts
+      if (status === "warning" || status === "critical") {
+        // Avoid duplicate SMS in the same sensor processing cycle
+        if (alertedThisCycle.has(sensor.key)) continue;
+
         try {
           const recipientsResult = await pool.query(
             "SELECT phone_number, name FROM authorized_recipients WHERE is_active = true"
@@ -444,18 +540,80 @@ app.post("/sensor", async (req, res) => {
             console.warn(`[${now.toISOString()}] No active recipients for SMS alert`);
             continue;
           }
-          const unitMap = {
-            "Temperature": "°C",
-            "pH Level": "",
-            "Water Level": "%",
-          };
-          const emojiMap = {
-            "Temperature": "🌡️",
-            "pH Level": "🧪",
-            "Water Level": "💧",
-          };
-          const unit = unitMap[sensor.key] || "";
-          const emoji = emojiMap[sensor.key] || "⚠️";
+
+          // Format timestamp for Philippines timezone
+          const timestamp = now.toLocaleString('en-PH', {
+            timeZone: 'Asia/Manila',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: true
+          });
+
+          // Get the appropriate message template and emoji based on status
+          const isCritical = status === "critical";
+          const messageTemplate = isCritical
+            ? SMS_CONFIG.messages.critical
+            : SMS_CONFIG.messages.warning;
+          const emoji = isCritical ? "🚨" : "⚠️";
+          const sensorDisplayName = SMS_CONFIG.sensorNames[sensor.key] || sensor.key.toUpperCase();
+          const unit = SMS_CONFIG.units[sensor.key] || "";
+
+          // Send SMS to each active recipient
+          for (const recipient of recipientsResult.rows) {
+            const recipientName = recipient.name || 'User';
+            const thresholdValue = direction === "Low" ? sensor.min : sensor.max;
+
+            // Build message using template
+            const message = buildMessage(messageTemplate, {
+              'SENSOR': sensorDisplayName,
+              'NAME': recipientName,
+              'VALUE': sensor.val,
+              'UNIT': unit,
+              'THRESHOLD': thresholdValue,
+              'TIME': timestamp
+            });
+
+            await sendSingleSMS(recipient.phone_number, message);
+          }
+
+          alertedThisCycle.add(sensor.key);
+          console.log(`[${now.toISOString()}] ${status.toUpperCase()} SMS sent for ${sensor.key} to ${recipientsResult.rows.length} recipients`);
+
+        } catch (smsErr) {
+          console.error(`[${now.toISOString()}] SMS alert failed:`, smsErr.message);
+        }
+      }
+    }
+
+    // Send hourly update if enabled and time has elapsed
+    if (shouldSendHourly) {
+      try {
+        const recipientsResult = await pool.query(
+          "SELECT phone_number, name FROM authorized_recipients WHERE is_active = true"
+        );
+        if (recipientsResult.rows.length > 0) {
+          // Determine status for each sensor
+          const tempStatus = getThresholdStatus(
+            latestSensorResult?.temperature ?? 0,
+            settings.temp_min,
+            settings.temp_max
+          );
+          const phStatus = getThresholdStatus(
+            latestSensorResult?.ph ?? 0,
+            settings.ph_min,
+            settings.ph_max
+          );
+          const waterStatus = getThresholdStatus(
+            latestSensorResult?.water_level ?? 0,
+            settings.water_level_min,
+            settings.water_level_max
+          );
+
+          const summary = (tempStatus === 'good' && phStatus === 'good' && waterStatus === 'good')
+            ? "All systems normal ✅"
+            : "Some parameters need attention ⚠️";
 
           const timestamp = now.toLocaleString('en-PH', {
             timeZone: 'Asia/Manila',
@@ -466,21 +624,26 @@ app.post("/sensor", async (req, res) => {
             hour12: true
           });
 
-          const phoneNumbers = recipientsResult.rows.map(row => row.phone_number);
-
           for (const recipient of recipientsResult.rows) {
-            const recipientName = recipient.name || 'User';
-            const message = `${emoji} ${sensor.key.toUpperCase()} ALERT\n` +
-              `Recipient: ${recipientName}\n` +
-              `Reading: ${sensor.val}${unit}\n` +
-              `Threshold: ${direction === "Low" ? sensor.min : sensor.max}${unit}\n` +
-              `Time: ${timestamp}`;
+            const message = buildMessage(SMS_CONFIG.messages.hourlyUpdate, {
+              'TIME': timestamp,
+              'TEMP': latestSensorResult?.temperature ?? 'N/A',
+              'TEMP_STATUS': getStatusText(tempStatus),
+              'PH': latestSensorResult?.ph ?? 'N/A',
+              'PH_STATUS': getStatusText(phStatus),
+              'WATER': latestSensorResult?.water_level ?? 'N/A',
+              'WATER_STATUS': getStatusText(waterStatus),
+              'SUMMARY': summary
+            });
 
             await sendSingleSMS(recipient.phone_number, message);
           }
-        } catch (smsErr) {
-          console.error(`[${now.toISOString()}] SMS alert failed:`, smsErr.message);
+
+          global.lastHourlyUpdateTs = nowTs;
+          console.log(`[${now.toISOString()}] Hourly status update SMS sent to ${recipientsResult.rows.length} recipients`);
         }
+      } catch (hourlyErr) {
+        console.error(`[${now.toISOString()}] Hourly SMS update failed:`, hourlyErr.message);
       }
     }
 
@@ -1069,7 +1232,22 @@ app.post("/settings/recipients/test/:id", requireAdmin, async (req, res) => {
     }
 
     const { phone_number, name } = result.rows[0];
-    const testMessage = `Test SMS from CrayVings Monitoring System. If you received this, ${name} is configured correctly!`;
+    // Use the critical alert template for test SMS (with test indicator)
+    const testMessage = buildMessage(SMS_CONFIG.messages.critical, {
+      'SENSOR': 'TEST ALERT',
+      'NAME': name,
+      'VALUE': 'N/A',
+      'UNIT': '',
+      'THRESHOLD': 'N/A',
+      'TIME': new Date().toLocaleString('en-PH', {
+        timeZone: 'Asia/Manila',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true
+      })
+    }) + "\n(This is a test message)";
 
     await sendSingleSMS(phone_number, testMessage);
 

@@ -38,6 +38,8 @@ This can help reduce risks caused by poor water conditions and improve overall m
 - **Custom alert sounds** - Audio alerts via Web Audio API
 - **PDF export** - Export system logs to PDF (LogsPage)
 - **Activity logging** - Track user interactions
+- **Smart save logic** - Only writes to database when data actually changes (prevents unnecessary updates)
+- **Token expiration** - Auth tokens expire after 24 hours for improved security
 
 ### Monitoring Parameters
 | Parameter | Sensor | Safe Range |
@@ -77,7 +79,7 @@ This can help reduce risks caused by poor water conditions and improve overall m
 | PDF Export | jsPDF + autoTable | 4.2 + 5.0 |
 | Routing | react-router-dom | 7.14 |
 | HTTP Client | Axios | 1.15 |
-| Backend | Express.js | 5.2 |
+| Backend | Express.js (raw SQL + smart change detection) | 5.2 |
 | Database | PostgreSQL | 15+ |
 | Connection Pool | pg | 8.20 |
 | Validation | Zod | 4.3 |
@@ -189,6 +191,7 @@ Navigate to **Settings** in the dashboard to configure:
 - Temperature min/max
 - pH min/max
 - Water level min/max
+- Uses smart save logic - only writes to DB when values actually change
 
 ### Alert Customization
 
@@ -202,6 +205,16 @@ Navigate to **Settings** in the dashboard to configure:
 - **Recipient management** in Settings page
 - **SMS cooldown** to prevent spam (5 seconds default)
 - **Test SMS** feature to verify configuration
+
+### Smart Save Logic
+
+The system prevents unnecessary database writes using explicit change detection:
+- **Settings**: Only updates fields that differ from current DB values
+- **Sensor data**: Skips duplicate readings (compares device_id, temperature, water_level, ph)
+- **Password reset**: Checks if new password equals current before updating
+- **Recipients**: Only updates name/is_active when changed
+
+Comparison handles: null/undefined, numeric strings vs numbers, dates (ISO string), JSON objects (sorted keys)
 
 ---
 

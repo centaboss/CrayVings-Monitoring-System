@@ -119,6 +119,7 @@ value slightly outside threshold:  WARNING (orange)
 - Persistent storage in database
 - Real-time validation with range checking
 - Activity logging for all changes
+- **Smart save logic** - Only writes to DB when values actually change (prevents unnecessary updates)
 - **SMS recipient management** - Add, edit, delete recipients
 - **Test SMS** - Verify SMS configuration
 
@@ -139,7 +140,7 @@ value slightly outside threshold:  WARNING (orange)
 
 - **SkySMS API integration** for sending SMS notifications
 - **Recipient management** - Add, edit, delete authorized recipients
-- **Bulk SMS sending** - Send alerts to multiple recipients simultaneously
+- **Individual SMS sending** - Send alerts to each recipient (bulk endpoint removed)
 - **SMS cooldown** - Configurable cooldown period (default: 5000ms)
 - **SMS logging** - Track all sent messages with status
 - **Test SMS** - Send test messages to verify configuration
@@ -313,8 +314,6 @@ const sensorSchema = z.object({
   temperature: z.coerce.number().min(-10).max(50),
   water_level: z.coerce.number().min(0).max(100),
   ph: z.coerce.number().min(0).max(14),
-  dissolved_oxygen: z.coerce.number().min(0).max(20).optional(),
-  ammonia: z.coerce.number().min(0).max(10).optional(),
   timestamp: z.string().datetime().optional(),
 });
 ```
@@ -322,8 +321,60 @@ const sensorSchema = z.object({
 **Validation features:**
 - Type coercion (strings to numbers)
 - Range constraints
-- Optional fields for optional sensors
 - Datetime parsing
+
+### Smart Save Logic (Change Detection)
+
+The backend uses explicit comparison to prevent unnecessary database writes:
+
+```javascript
+// Normalize values for safe comparison (handles null, dates, numbers, objects)
+function normalizeComparableValue(value) {
+  if (value === undefined || value === null) return null;
+  if (value instanceof Date) return value.toISOString();
+  if (isNumericLike(value)) return Number(value);
+  if (typeof value === "string") return value.trim();
+  if (isPlainObject(value) || Array.isArray(value)) return stableStringify(value);
+  return value;
+}
+
+// Compare normalized values using Object.is for proper equality
+function areValuesEqual(currentValue, newValue) {
+  const current = normalizeComparableValue(currentValue);
+  const next = normalizeComparableValue(newValue);
+  if (current === null || next === null) return current === next;
+  return Object.is(current, next);
+}
+
+// Returns only fields that actually changed vs current DB row
+function getChangedFields(currentRow, updates) {
+  const changed = {};
+  for (const [field, newValue] of Object.entries(updates)) {
+    const currentValue = currentRow ? currentRow[field] : undefined;
+    if (!areValuesEqual(currentValue, newValue)) {
+      changed[field] = newValue;
+    }
+  }
+  return changed;
+}
+
+// Generic update helper - only writes changed fields to database
+async function updateOnlyIfChanged(db, options) {
+  const { table, keyColumn, keyValue, currentRow, updates, touchUpdatedAt } = options;
+  const changed = getChangedFields(currentRow, updates);
+  if (Object.keys(changed).length === 0) {
+    return { changed: false, row: currentRow };
+  }
+  // Build UPDATE query with only changed fields
+  // ...
+}
+```
+
+**Used for:**
+- **Settings updates** - Only updates threshold fields that changed
+- **Sensor data** - Skips duplicate readings (compares device_id, temperature, water_level, ph)
+- **Recipients** - Only updates name or is_active when changed
+- **Password reset** - Checks if new password equals current hash before updating
 
 ### Database Operations
 
