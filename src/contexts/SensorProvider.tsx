@@ -362,15 +362,12 @@ function useActivityLogsManager() {
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const isMountedRef = useRef(true);
-  const searchRef = useRef(state.activitySearch);
-  const sortRef = useRef(state.activitySortBy);
-  const filterRef = useRef(state.activityActionFilter);
+  const stateRef = useRef(state);
 
+  // Keep stateRef in sync
   useEffect(() => {
-    searchRef.current = state.activitySearch;
-    sortRef.current = state.activitySortBy;
-    filterRef.current = state.activityActionFilter;
-  }, [state.activitySearch, state.activitySortBy, state.activityActionFilter]);
+    stateRef.current = state;
+  }, [state]);
 
   const fetchData = useCallback(async (page = 1, search?: string, sortBy?: "newest" | "oldest", actionFilter?: string) => {
     if (abortControllerRef.current) {
@@ -378,9 +375,11 @@ function useActivityLogsManager() {
     }
     abortControllerRef.current = new AbortController();
 
-    const currentSearch = search ?? searchRef.current;
-    const currentSort = sortBy ?? sortRef.current;
-    const currentFilter = actionFilter ?? filterRef.current;
+    const currentState = stateRef.current;
+    // Use parameters if provided, otherwise use current state
+    const currentSearch = search !== undefined ? search : currentState.activitySearch;
+    const currentSort = sortBy !== undefined ? sortBy : currentState.activitySortBy;
+    const currentFilter = actionFilter !== undefined ? actionFilter : currentState.activityActionFilter;
 
     try {
       const response = await fetchActivityLogs(
@@ -434,22 +433,22 @@ function useActivityLogsManager() {
   const setPage = useCallback((page: number) => {
     setState((prev) => ({ ...prev, activityLogsPage: page }));
     fetchData(page);
-  }, [fetchData]);
+  }, []);
 
   const setSearch = useCallback((search: string) => {
     setState((prev) => ({ ...prev, activitySearch: search, activityLogsPage: 1 }));
     fetchData(1, search);
-  }, [fetchData]);
+  }, []);
 
   const setSortBy = useCallback((sort: "newest" | "oldest") => {
     setState((prev) => ({ ...prev, activitySortBy: sort, activityLogsPage: 1 }));
     fetchData(1, undefined, sort);
-  }, [fetchData]);
+  }, []);
 
   const setActionFilter = useCallback((filter: string) => {
     setState((prev) => ({ ...prev, activityActionFilter: filter, activityLogsPage: 1 }));
     fetchData(1, undefined, undefined, filter);
-  }, [fetchData]);
+  }, []);
 
   const logActivity = useCallback((actionType: ActivityActionType, description: string, module: string) => {
     apiLogActivity({ action_type: actionType, description, module });

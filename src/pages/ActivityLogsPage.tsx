@@ -1,7 +1,11 @@
 import { useCallback, useState } from "react";
 import { Search, RefreshCw, ChevronLeft, ChevronRight, ArrowUpDown, Activity } from "lucide-react";
 import { useActivityLogs } from "../hooks/useSensors";
-import { ACTIVITY_ACTION_TYPES } from "../types";
+
+const FILTER_ACTION_TYPES = [
+  "navigation",
+  "settings_change",
+];
 
 const ACTION_TYPE_COLORS: Record<string, string> = {
   navigation: "bg-blue-100 text-blue-700",
@@ -20,7 +24,7 @@ const ACTION_TYPE_ICONS: Record<string, React.ReactNode> = {
   form_submit: "",
   settings_change: "",
   device_connect: "",
-  device_disconnect: "⏏",
+  device_disconnect: "",
   system_event: "",
   login: "",
 };
@@ -135,7 +139,7 @@ export default function ActivityLogsPage() {
           className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
         >
           <option value="">All Actions</option>
-          {ACTIVITY_ACTION_TYPES.map((type) => (
+          {FILTER_ACTION_TYPES.map((type) => (
             <option key={type} value={type}>
               {type.replace("_", " ")}
             </option>
