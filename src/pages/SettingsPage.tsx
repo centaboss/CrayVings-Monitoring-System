@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo } from "react";
 import { useSensorSettings, useActivityLogger } from "../hooks/useSensors";
-import { Settings, Save, AlertTriangle } from "lucide-react";
+import { useAuth } from "../contexts/AuthContext";
+import { Settings, Save, AlertTriangle, Lock } from "lucide-react";
 import type { SensorSettings } from "../types";
 import { DEFAULT_SETTINGS, getSettingsThresholds } from "../types";
 
@@ -64,7 +65,9 @@ export default function SettingsPage() {
     settingsSaved, 
     settingsSaving 
   } = useSensorSettings();
+  const { user } = useAuth();
   const logActivity = useActivityLogger();
+  const isAdmin = user?.role === "admin";
   
   const [localSettings, setLocalSettings] = useState<SensorSettings | null>(null);
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
@@ -154,9 +157,12 @@ export default function SettingsPage() {
         <div className="flex items-center gap-2 mb-4">
           <Settings className="text-gray-600" size={20} />
           <h2 className="mt-0 text-gray-800">Settings</h2>
+          {!isAdmin && <Lock size={16} className="text-gray-400" />}
         </div>
         <p className="text-gray-600 mb-0">
-          Configure sensor thresholds. Alerts are logged when values go outside the safe range.
+          {isAdmin
+            ? "Configure sensor thresholds. Alerts are logged when values go outside the safe range."
+            : "View sensor thresholds. Only administrators can modify these settings."}
         </p>
       </div>
 
@@ -188,15 +194,18 @@ export default function SettingsPage() {
                     <input
                       type="number"
                       step="0.1"
+                      disabled={!isAdmin}
                       value={displaySettings[keys.min] != null ? Number(displaySettings[keys.min]) : threshold.range.min}
                       onChange={(e) => updateSetting(keys.min, e.target.value)}
                       className={`w-full px-2 py-1.5 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent ${
-                        validationErrors[keys.min]
+                        !isAdmin
+                          ? "bg-gray-100 text-gray-500 cursor-not-allowed border-gray-200"
+                          : validationErrors[keys.min]
                           ? "border-red-500"
                           : "border-gray-200"
                       }`}
                     />
-                    {validationErrors[keys.min] && (
+                    {validationErrors[keys.min] && isAdmin && (
                       <div className="text-[10px] text-red-500 mt-1">
                         {validationErrors[keys.min]}
                       </div>
@@ -207,10 +216,13 @@ export default function SettingsPage() {
                     <input
                       type="number"
                       step="0.1"
+                      disabled={!isAdmin}
                       value={displaySettings[keys.max] != null ? Number(displaySettings[keys.max]) : threshold.range.max}
                       onChange={(e) => updateSetting(keys.max, e.target.value)}
                       className={`w-full px-2 py-1.5 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent ${
-                        validationErrors[keys.max]
+                        !isAdmin
+                          ? "bg-gray-100 text-gray-500 cursor-not-allowed border-gray-200"
+                          : validationErrors[keys.max]
                           ? "border-red-500"
                           : "border-gray-200"
                       }`}
@@ -226,15 +238,22 @@ export default function SettingsPage() {
 
 
       <div className="flex items-center gap-3">
-        <button
-          onClick={handleSave}
-          disabled={settingsSaving || Object.keys(validationErrors).length > 0}
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white rounded-lg text-sm font-medium transition-colors"
-        >
-          <Save size={16} />
-          {settingsSaving ? "Saving..." : "Save Settings"}
-        </button>
-        {settingsSaved && (
+        {isAdmin ? (
+          <button
+            onClick={handleSave}
+            disabled={settingsSaving || Object.keys(validationErrors).length > 0}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white rounded-lg text-sm font-medium transition-colors"
+          >
+            <Save size={16} />
+            {settingsSaving ? "Saving..." : "Save Settings"}
+          </button>
+        ) : (
+          <div className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-400 rounded-lg text-sm font-medium cursor-not-allowed">
+            <Lock size={16} />
+            Admin Access Required
+          </div>
+        )}
+        {settingsSaved && isAdmin && (
           <span className="text-sm text-green-600 font-medium">Settings saved!</span>
         )}
       </div>

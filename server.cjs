@@ -466,7 +466,7 @@ app.get("/settings", async (req, res) => {
   }
 });
 
-app.post("/settings", async (req, res) => {
+app.post("/settings", requireAdmin, async (req, res) => {
   try {
     const {
       temp_min,
