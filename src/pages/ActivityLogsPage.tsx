@@ -1,3 +1,27 @@
+// =============================================================================
+// FILE: src/pages/ActivityLogsPage.tsx
+// =============================================================================
+// PURPOSE: User activity tracking page with search, filter, and sort.
+//
+// This page displays user interaction logs (navigation, settings changes,
+// logins, etc.) from the activity_logs database table with:
+//   1. Search bar with debounced input (300ms delay)
+//   2. Action type filter dropdown (navigation, settings_change, etc.)
+//   3. Sort toggle (newest first / oldest first)
+//   4. Refresh button for manual re-fetch
+//   5. Paginated table with time, user, action, description, module
+//
+// ACTION TYPE COLOR CODING:
+//   - navigation: Blue
+//   - settings_change: Orange
+//   - device_connect: Green
+//   - device_disconnect: Red
+//   - login: Cyan
+//   - Others: Various colors
+//
+// DATA: Activity logs from SensorProvider (fetched on mount, refreshed on demand)
+// =============================================================================
+
 import { useCallback, useState } from "react";
 import { Search, RefreshCw, ChevronLeft, ChevronRight, ArrowUpDown, Activity } from "lucide-react";
 import { useActivityLogs } from "../hooks/useSensors";

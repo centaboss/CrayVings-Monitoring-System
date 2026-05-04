@@ -1,3 +1,23 @@
+// =============================================================================
+// FILE: src/pages/AlertsPage.tsx
+// =============================================================================
+// PURPOSE: Alert history page showing system logs with severity classification.
+//
+// This page displays system logs (from the system_logs database table) with:
+//   1. Filter buttons: All / Alert / Change
+//   2. Severity-based color coding (critical=red, warning=orange, info=blue)
+//   3. Alert count badges for each filter category
+//   4. Pagination for browsing through log entries
+//
+// Each log entry shows:
+//   - Action type badge (Alert or Change)
+//   - Sensor parameter name
+//   - Value that triggered the alert
+//   - Timestamp
+//
+// DATA: System logs from SensorProvider (auto-polled every 5 seconds)
+// =============================================================================
+
 import { useState, useMemo } from "react";
 import { AlertTriangle, AlertCircle, ChevronLeft, ChevronRight } from "lucide-react";
 import { useSensors } from "../hooks/useSensors";

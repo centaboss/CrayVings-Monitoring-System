@@ -1,3 +1,51 @@
+// =============================================================================
+// FILE: server.cjs
+// =============================================================================
+// PURPOSE: Express.js backend server for the CRAYvings Monitoring System.
+//
+// This file is the central backend API that:
+//   1. Receives sensor data from the ESP32 microcontroller via HTTP POST
+//   2. Stores all readings in a PostgreSQL database
+//   3. Evaluates sensor values against configurable thresholds
+//   4. Sends SMS alerts via SkySMS API when readings go out of range
+//   5. Provides REST endpoints for the React frontend to query data
+//   6. Manages user authentication with token-based sessions
+//   7. Handles system logging, activity logging, and alert muting
+//
+// DATA FLOW:
+//   ESP32 sensor -> POST /sensor -> PostgreSQL (sensors table)
+//      -> Threshold evaluation -> SMS alerts (if configured)
+//   Frontend -> GET /sensor/latest -> Real-time readings displayed
+//   Frontend -> POST /auth/login -> Token returned -> Subsequent requests use Bearer token
+//
+// ARCHITECTURE:
+//   - Single-file Express.js server (CommonJS module)
+//   - PostgreSQL connection pool for concurrent query handling
+//   - In-memory alert state tracking (lastAlertedState, smsMuteUntil)
+//   - Parameterized SQL queries to prevent SQL injection
+//   - PBKDF2 password hashing with random salt
+//
+// SECURITY NOTES:
+//   - All SQL queries use parameterized placeholders ($1, $2, etc.)
+//   - Passwords are never stored in plaintext (salt + PBKDF2-SHA512)
+//   - Auth tokens are 64-character random hex strings
+//   - Admin-only routes protected by requireAdmin middleware
+//   - User routes protected by requireAuth middleware
+//   - CORS enabled for frontend communication
+//   - .env file contains database credentials and API keys (gitignored)
+// =============================================================================
+
+// ========================
+// DEPENDENCIES
+// ========================
+// - express: HTTP server framework
+// - cors: Enables Cross-Origin Resource Sharing for frontend communication
+// - axios: HTTP client used to call the SkySMS API
+// - pg (Pool): PostgreSQL connection pool for database queries
+// - zod: Schema validation library
+// - crypto: Node.js built-in module for password hashing and token generation
+// - dotenv: Loads environment variables from .env file
+
 const express = require("express");
 const cors = require("cors");
 const axios = require("axios");
@@ -6,9 +54,18 @@ const { z } = require("zod");
 const crypto = require("crypto");
 require("dotenv").config();
 
+// ========================
+// EXPRESS APP SETUP
+// ========================
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// ========================
+// POSTGRESQL CONNECTION POOL
+// ========================
+// The Pool manages multiple database connections for concurrent requests.
+// Configuration is read from environment variables (.env file).
+// The pool automatically handles connection reuse, queuing, and cleanup.
 const pool = new Pool({
   host: process.env.PG_HOST,
   port: parseInt(process.env.PG_PORT),
@@ -17,31 +74,66 @@ const pool = new Pool({
   password: process.env.PG_PASSWORD,
 });
 
+// Enable CORS so the Vite/React frontend (dev server) can call this API
 app.use(cors());
+// Parse incoming JSON request bodies
 app.use(express.json());
 
 // =============================================================================
-// Password hashing
+// PASSWORD HASHING UTILITIES
 // =============================================================================
+// Uses PBKDF2 with SHA-512 and a random 16-byte salt for secure password storage.
+// The stored format is: "salt:hash" (both as hex strings).
+// This is a synchronous hashing approach suitable for this application scale.
+
+/**
+ * Hashes a plaintext password with a random salt.
+ * @param {string} password - The plaintext password to hash
+ * @returns {string} Combined salt and hash in "salt:hash" format
+ */
 function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString("hex");
   const hash = crypto.pbkdf2Sync(password, salt, 10000, 64, "sha512").toString("hex");
   return `${salt}:${hash}`;
 }
 
+/**
+ * Verifies a plaintext password against a stored "salt:hash" string.
+ * @param {string} password - The plaintext password to verify
+ * @param {string} stored - The stored "salt:hash" string from the database
+ * @returns {boolean} True if the password matches
+ */
 function verifyPassword(password, stored) {
   const [salt, hash] = stored.split(":");
   const verifyHash = crypto.pbkdf2Sync(password, salt, 10000, 64, "sha512").toString("hex");
   return hash === verifyHash;
 }
 
+/**
+ * Generates a random 64-character hex token for session authentication.
+ * @returns {string} Random token string
+ */
 function generateToken() {
   return crypto.randomBytes(32).toString("hex");
 }
 
 // =============================================================================
-// Auth middleware
+// AUTHENTICATION MIDDLEWARE
 // =============================================================================
+// Two middleware functions protect routes based on role:
+//   - requireAdmin: Validates token AND checks that user has "admin" role
+//   - requireAuth:  Validates token only (any authenticated user)
+//
+// Both extract the Bearer token from the Authorization header,
+// query the database to validate it, and attach the user object to req.
+// If validation fails, they return 401 (no token) or 403 (invalid/insufficient role).
+
+/**
+ * Middleware that requires a valid admin token.
+ * Checks the Authorization header for a Bearer token, validates it against
+ * the users table, and ensures the user has the "admin" role.
+ * Attaches the user object to req.adminUser on success.
+ */
 function requireAdmin(req, res, next) {
   const token = req.headers.authorization?.replace("Bearer ", "");
   if (!token) return res.status(401).json({ message: "Authentication required" });
@@ -57,6 +149,11 @@ function requireAdmin(req, res, next) {
     .catch(err => res.status(500).json({ message: "Auth error", error: err.message }));
 }
 
+/**
+ * Middleware that requires any valid authenticated user token.
+ * Checks the Authorization header for a Bearer token and validates it
+ * against the users table. Attaches the user object to req.user on success.
+ */
 function requireAuth(req, res, next) {
   const token = req.headers.authorization?.replace("Bearer ", "");
   if (!token) return res.status(401).json({ message: "Authentication required" });
@@ -71,8 +168,19 @@ function requireAuth(req, res, next) {
 }
 
 // =============================================================================
-// Helper: detect changed fields
+// HELPER: DETECT CHANGED FIELDS
 // =============================================================================
+// Compares current database row values with proposed updates.
+// Only returns fields that have actually changed, to avoid unnecessary DB writes
+// and prevent triggering "no change" audit log entries.
+
+/**
+ * Compares current database values with proposed updates and returns only changed fields.
+ * Uses String() comparison to handle numeric/string type differences.
+ * @param {object} current - Current row from the database
+ * @param {object} updates - Proposed new values
+ * @returns {object} Only the fields that have changed
+ */
 function getChangedFields(current, updates) {
   const changes = {};
   for (const key of Object.keys(updates)) {
@@ -84,8 +192,26 @@ function getChangedFields(current, updates) {
 }
 
 // =============================================================================
-// Helper: update only if fields actually changed
+// HELPER: UPDATE ONLY IF FIELDS ACTUALLY CHANGED
 // =============================================================================
+// Wraps a database UPDATE with change detection.
+// Only executes the UPDATE query if at least one field has changed.
+// Optionally updates the updated_at timestamp when changes are made.
+// This prevents unnecessary database writes and keeps audit logs clean.
+
+/**
+ * Performs a database UPDATE only if fields have actually changed.
+ * Avoids unnecessary writes and keeps audit trails meaningful.
+ * @param {object} client - PostgreSQL client or pool instance
+ * @param {object} params - Update parameters
+ * @param {string} params.table - Database table name
+ * @param {string} params.keyColumn - Primary key column name (e.g., "id")
+ * @param {*} params.keyValue - Primary key value
+ * @param {object} params.currentRow - Current row data from the database
+ * @param {object} params.updates - Proposed new values
+ * @param {boolean} params.touchUpdatedAt - Whether to set updated_at to NOW()
+ * @returns {object} { changed: boolean, row: updated or current row }
+ */
 async function updateOnlyIfChanged(client, { table, keyColumn, keyValue, currentRow, updates, touchUpdatedAt }) {
   const changes = getChangedFields(currentRow, updates);
   if (Object.keys(changes).length === 0) {
@@ -103,8 +229,30 @@ async function updateOnlyIfChanged(client, { table, keyColumn, keyValue, current
 }
 
 // =============================================================================
-// Threshold status
+// THRESHOLD STATUS EVALUATION
 // =============================================================================
+// Determines if a sensor reading is "good", "warning", or "critical"
+// based on its min/max threshold range.
+//
+// Logic:
+//   - "good":      Value is within [min, max] range
+//   - "warning":   Value is outside range but within 15% of range size from boundary
+//   - "critical":  Value is outside range AND deviation >= 15% of range size
+//
+// Example for temperature (min=20, max=31, range=11, margin=1.65):
+//   - 22°C = good (within range)
+//   - 19°C = warning (1° below min, less than 1.65° margin)
+//   - 17°C = critical (3° below min, more than 1.65° margin)
+
+/**
+ * Evaluates a sensor value against its min/max thresholds.
+ * Returns "good", "warning", or "critical" based on how far outside
+ * the acceptable range the value is.
+ * @param {number} value - Current sensor reading
+ * @param {number} min - Minimum acceptable value
+ * @param {number} max - Maximum acceptable value
+ * @returns {"good"|"warning"|"critical"} Status classification
+ */
 function getThresholdStatus(value, min, max) {
   const rangeSize = max - min;
   const criticalMargin = rangeSize * 0.15;
@@ -120,31 +268,68 @@ function getThresholdStatus(value, min, max) {
 }
 
 // =============================================================================
-// SMS helpers
+// SMS NOTIFICATION SYSTEM (SkySMS Integration)
 // =============================================================================
+// This system sends SMS alerts when sensor readings exceed thresholds.
+// It uses the SkySMS API (a Philippine SMS gateway) to deliver messages.
+//
+// Features:
+//   - Warning and Critical alert templates with dynamic placeholders
+//   - Hourly status update messages with all sensor readings
+//   - Exponential backoff retry (up to 2 retries)
+//   - SMS logging to database (sms_logs table) for audit trail
+//   - Configurable cooldowns to prevent alert spam:
+//     * Warning: 1 hour between repeats
+//     * Critical: 5 minutes between repeats
+//   - Mute functionality to temporarily pause all SMS alerts
+//
+// ENVIRONMENT VARIABLES:
+//   SKYSMS_API_KEY         - API key for SkySMS service
+//   SKYSMS_API_URL         - Base URL for SkySMS API (default: skysms.skyio.site)
+//   HOURLY_SMS_ENABLED     - Enable/disable hourly updates (default: true)
+//   HOURLY_SMS_INTERVAL_MS - Interval for hourly updates (default: 3600000ms = 1hr)
+//   WARNING_SMS_COOLDOWN_MS - Cooldown between warning SMS (default: 3600000ms = 1hr)
+//   SMS_COOLDOWN_MS         - Cooldown between critical SMS (default: 300000ms = 5min)
+// =============================================================================
+
 const SKYSMS_API_KEY = process.env.SKYSMS_API_KEY;
 const SKYSMS_API_URL = process.env.SKYSMS_API_URL || "https://skysms.skyio.site/api/v1";
 
+// SMS configuration object: templates, sensor name mappings, units, cooldowns
 const SMS_CONFIG = {
   messages: {
+    // Warning template: sent when a reading is slightly outside the safe range
     warning: "⚠️ {{SENSOR}} WARNING\nRecipient: {{NAME}}\nReading: {{VALUE}}{{UNIT}}\nThreshold: {{THRESHOLD}}{{UNIT}}\nTime: {{TIME}}\nStatus: Warning",
+    // Critical template: sent when a reading is dangerously outside the safe range
     critical: "🚨 {{SENSOR}} CRITICAL ALERT\nRecipient: {{NAME}}\nReading: {{VALUE}}{{UNIT}}\nThreshold: {{THRESHOLD}}{{UNIT}}\nTime: {{TIME}}\nStatus: CRITICAL",
+    // Hourly update template: periodic summary of all sensor statuses
     hourlyUpdate: "📊 CRAYVINGS HOURLY UPDATE\nTime: {{TIME}}\nTemperature: {{TEMP}}°C ({{TEMP_STATUS}})\npH Level: {{PH}} ({{PH_STATUS}})\nWater Level: {{WATER}}% ({{WATER_STATUS}})\n{{SUMMARY}}"
   },
+  // Maps display names to SMS-friendly uppercase names
   sensorNames: { "Temperature": "TEMPERATURE", "pH Level": "PH LEVEL", "Water Level": "WATER LEVEL" },
+  // Units for each sensor type in SMS messages
   units: { "Temperature": "°C", "pH Level": "pH", "Water Level": "%" },
+  // Hourly SMS update settings
   hourly: {
     enabled: process.env.HOURLY_SMS_ENABLED !== "false",
     intervalMs: parseInt(process.env.HOURLY_SMS_INTERVAL_MS) || 3600000
   },
+  // Cooldown periods to prevent alert spam (time between repeated alerts)
   cooldown: {
-    warning: parseInt(process.env.WARNING_SMS_COOLDOWN_MS) || 3600000,
-    critical: parseInt(process.env.SMS_COOLDOWN_MS) || 300000
+    warning: parseInt(process.env.WARNING_SMS_COOLDOWN_MS) || 3600000,   // 1 hour
+    critical: parseInt(process.env.SMS_COOLDOWN_MS) || 300000            // 5 minutes
   },
+  // Retry configuration for failed SMS sends (exponential backoff)
   retry: { maxRetries: 2, baseDelayMs: 2000 },
-  from: "CRAYVINGS"
+  from: "CRAYVINGS"  // Sender name displayed on the recipient's phone
 };
 
+/**
+ * Replaces {{PLACEHOLDER}} tokens in a message template with actual values.
+ * @param {string} template - Message template with {{KEY}} placeholders
+ * @param {object} data - Key-value pairs to substitute
+ * @returns {string} Final message with all placeholders replaced
+ */
 function buildMessage(template, data) {
   let message = template;
   for (const [key, value] of Object.entries(data)) {
@@ -153,6 +338,11 @@ function buildMessage(template, data) {
   return message;
 }
 
+/**
+ * Converts a threshold status string to a human-readable text with emoji.
+ * @param {string} status - "good", "warning", or "critical"
+ * @returns {string} Display text (e.g., "✅ Good", "⚠️ Warning", "🚨 Critical")
+ */
 function getStatusText(status) {
   switch (status) {
     case "good": return "✅ Good";
@@ -162,6 +352,14 @@ function getStatusText(status) {
   }
 }
 
+/**
+ * Sends a single SMS via the SkySMS API with retry logic.
+ * Uses exponential backoff: retries after 2s, 4s, 8s delays.
+ * Logs the result (sent/failed) to the sms_logs database table.
+ * @param {string} phoneNumber - Recipient phone number (e.g., +639XXXXXXXXX)
+ * @param {string} message - The SMS message body
+ * @returns {boolean} True if SMS was sent successfully
+ */
 async function sendSingleSMS(phoneNumber, message) {
   const { maxRetries, baseDelayMs } = SMS_CONFIG.retry;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -186,12 +384,18 @@ async function sendSingleSMS(phoneNumber, message) {
         await logSMS(phoneNumber, message, "failed", errorMessage, null);
         return false;
       }
+      // Exponential backoff: wait 2s, then 4s, then 8s between retries
       await new Promise(resolve => setTimeout(resolve, baseDelayMs * Math.pow(2, attempt)));
     }
   }
   return false;
 }
 
+/**
+ * Logs an SMS send attempt to the sms_logs table for audit trail.
+ * Records phone number, message content, status (sent/failed), error message, and timestamp.
+ * Failures to log are caught silently to prevent cascading errors.
+ */
 async function logSMS(phone, message, status, error, smsId = null) {
   try {
     await pool.query(
@@ -203,29 +407,74 @@ async function logSMS(phone, message, status, error, smsId = null) {
   }
 }
 
+// In-memory state tracking for alert deduplication and SMS muting
+// lastAlertedState: Tracks the last alert status per sensor to avoid repeated alerts
+// smsMuteUntil: ISO timestamp until which all SMS alerts are suppressed
 let lastAlertedState = {};
 let smsMuteUntil = null;
 
 // =============================================================================
-// ROUTES
+// API ROUTES
 // =============================================================================
 
-// Health check
+// ========================
+// Health Check & Root
+// ========================
+// GET /health   - Returns server status and current time (used for monitoring)
+// GET /         - Returns API identification message
+
+/**
+ * GET /health
+ * Simple health check endpoint. Returns server status and current timestamp.
+ * Used by monitoring tools and the frontend to verify the server is running.
+ */
 app.get("/health", (req, res) => {
   res.json({ status: "ok", serverTime: new Date().toISOString() });
 });
 
-// Root
+/**
+ * GET /
+ * Root endpoint. Returns API identification message.
+ */
 app.get("/", (req, res) => {
   res.json({ message: "CRAYvings Monitoring System API", status: "running" });
 });
 
-// POST /sensor (ESP32)
+// ========================
+// SENSOR DATA ENDPOINTS
+// ========================
+
+/**
+ * POST /sensor
+ * PRIMARY DATA INGESTION ENDPOINT - Called by the ESP32 device.
+ *
+ * Receives sensor readings (temperature, water_level, pH) from the ESP32,
+ * stores them in the PostgreSQL sensors table, then evaluates thresholds
+ * and sends SMS alerts if readings are outside the safe range.
+ *
+ * Request body:
+ *   - device_id (required): Identifier for the ESP32 device
+ *   - temperature: Water temperature in Celsius
+ *   - water_level: Water level percentage
+ *   - ph: pH level of the water
+ *
+ * Alert logic:
+ *   1. Fetches current threshold settings from sensor_settings table
+ *   2. For each sensor (temp, pH, water_level), checks if value is outside range
+ *   3. If outside range, determines warning vs critical based on deviation
+ *   4. Checks cooldown period to avoid spam (1hr for warning, 5min for critical)
+ *   5. Fetches active SMS recipients from authorized_recipients table
+ *   6. Sends SMS to all active recipients with formatted alert message
+ *   7. Records alert in system_logs and last_alerts tables
+ *
+ * NOTE: Temperature and pH readings of 0 are skipped (sensor may not be connected)
+ */
 app.post("/sensor", async (req, res) => {
   try {
     const { device_id, temperature, water_level, ph } = req.body;
     if (!device_id) return res.status(400).json({ message: "device_id is required" });
 
+    // Store sensor reading in the database
     const ts = new Date();
     const result = await pool.query(
       `INSERT INTO sensors (device_id, temperature, water_level, ph, timestamp) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
@@ -233,26 +482,32 @@ app.post("/sensor", async (req, res) => {
     );
     console.log(`[${new Date().toISOString()}] Sensor data saved from ${device_id}`);
 
-    // Check thresholds and send alerts
+    // Fetch threshold settings from the database (with defaults if not configured)
     const settingsResult = await pool.query("SELECT * FROM sensor_settings LIMIT 1");
     const settings = settingsResult.rows[0] || { temp_min: 20, temp_max: 31, ph_min: 6.5, ph_max: 8.5, water_level_min: 10, water_level_max: 100 };
 
+    // Define sensor checks with their current values and threshold ranges
     const sensorChecks = [
       { key: "Temperature", val: Number(temperature), min: Number(settings.temp_min), max: Number(settings.temp_max) },
       { key: "pH Level", val: Number(ph), min: Number(settings.ph_min), max: Number(settings.ph_max) },
       { key: "Water Level", val: Number(water_level), min: Number(settings.water_level_min), max: Number(settings.water_level_max) },
     ];
 
+    // Track hourly update state on global object
     const nowTs = ts.getTime();
     const hourlyEnabled = SMS_CONFIG.hourly.enabled;
     if (hourlyEnabled && !global.lastHourlyUpdateTs) global.lastHourlyUpdateTs = nowTs;
 
+    // Evaluate each sensor against its thresholds
     for (const sensor of sensorChecks) {
+      // Skip zero readings for Temperature and pH (sensor may not be connected)
+      // Water Level can legitimately be 0
       if (sensor.val === 0 && sensor.key !== "Water Level") continue;
       const status = getThresholdStatus(sensor.val, sensor.min, sensor.max);
       const last = lastAlertedState[sensor.key] || {};
       const lastTs = last.timestamp ? new Date(last.timestamp).getTime() : 0;
 
+      // If reading is back to normal, update state and skip alerting
       if (status === "good") {
         if (last.status && last.status !== "good") {
           await pool.query(
@@ -264,23 +519,30 @@ app.post("/sensor", async (req, res) => {
         continue;
       }
 
+      // Check cooldown period to prevent alert spam
       const interval = status === "critical" ? SMS_CONFIG.cooldown.critical : SMS_CONFIG.cooldown.warning;
       if (status === last.status && nowTs - lastTs < interval) continue;
 
+      // Determine if the value is above or below threshold
       const direction = sensor.val < sensor.min ? "Low" : "High";
+      
+      // Log the alert to system_logs
       await pool.query(`INSERT INTO system_logs (action, parameter, old_value, new_value) VALUES ($1, $2, $3, $4)`,
         ["Alert", sensor.key, direction, sensor.val]);
 
+      // Update last_alerts table (upsert: insert or update on conflict)
       await pool.query(
         `INSERT INTO last_alerts (sensor_key, status, value, timestamp) VALUES ($1, $2, $3, $4) ON CONFLICT (sensor_key) DO UPDATE SET status = $2, value = $3, timestamp = $4`,
         [sensor.key, status, sensor.val, ts.toISOString()]
       );
       lastAlertedState[sensor.key] = { status, value: sensor.val, timestamp: ts.toISOString() };
 
+      // Fetch all active SMS recipients and send alerts
       const recipients = await pool.query("SELECT phone_number, name FROM authorized_recipients WHERE is_active = true");
       if (recipients.rows.length > 0) {
         const isCritical = status === "critical";
         const template = isCritical ? SMS_CONFIG.messages.critical : SMS_CONFIG.messages.warning;
+        // Format timestamp in Philippine timezone for SMS readability
         const timestamp = ts.toLocaleString("en-PH", { timeZone: "Asia/Manila", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: true });
         for (const r of recipients.rows) {
           const message = buildMessage(template, {
@@ -300,7 +562,12 @@ app.post("/sensor", async (req, res) => {
   }
 });
 
-// GET /sensor (history)
+/**
+ * GET /sensor
+ * Returns sensor history (most recent readings first).
+ * Query parameter: limit (default: 300, max: 1000, min: 1)
+ * Used by the frontend to display historical trend charts.
+ */
 app.get("/sensor", async (req, res) => {
   try {
     const limit = Math.min(1000, Math.max(1, parseInt(req.query.limit) || 300));
@@ -312,7 +579,12 @@ app.get("/sensor", async (req, res) => {
   }
 });
 
-// GET /sensor/latest
+/**
+ * GET /sensor/latest
+ * Returns the most recent sensor reading.
+ * Used by the frontend for real-time dashboard display.
+ * Returns 404 if no data exists in the database.
+ */
 app.get("/sensor/latest", async (req, res) => {
   try {
     const result = await pool.query("SELECT * FROM sensors ORDER BY timestamp DESC LIMIT 1");
@@ -324,7 +596,17 @@ app.get("/sensor/latest", async (req, res) => {
   }
 });
 
-// POST /auth/login
+// ========================
+// AUTHENTICATION ENDPOINTS
+// ========================
+
+/**
+ * POST /auth/login
+ * Authenticates a user with username and password.
+ * On success, generates a new session token, stores it in the database,
+ * and returns the user info + token to the client.
+ * The client stores the token in localStorage for subsequent API requests.
+ */
 app.post("/auth/login", async (req, res) => {
   try {
     const { username, password } = req.body;
@@ -336,6 +618,7 @@ app.post("/auth/login", async (req, res) => {
     const user = result.rows[0];
     if (!verifyPassword(password, user.password_hash)) return res.status(401).json({ message: "Invalid credentials" });
 
+    // Generate a new session token and store it in the database
     const token = generateToken();
     await pool.query("UPDATE users SET token = $1 WHERE id = $2", [token, user.id]);
 
@@ -350,7 +633,11 @@ app.post("/auth/login", async (req, res) => {
   }
 });
 
-// GET /auth/users
+/**
+ * GET /auth/users (Admin only)
+ * Returns all users with their details (excluding password hashes and tokens).
+ * Ordered by creation date (newest first).
+ */
 app.get("/auth/users", requireAdmin, async (req, res) => {
   try {
     const result = await pool.query("SELECT id, name, username, email, role, created_at FROM users ORDER BY created_at DESC");
@@ -360,7 +647,12 @@ app.get("/auth/users", requireAdmin, async (req, res) => {
   }
 });
 
-// POST /auth/users
+/**
+ * POST /auth/users (Admin only)
+ * Creates a new user account with hashed password.
+ * Validates that all required fields are provided.
+ * Returns 409 (Conflict) if username or email already exists (unique constraint).
+ */
 app.post("/auth/users", requireAdmin, async (req, res) => {
   try {
     const { name, username, email, password, role } = req.body;
@@ -373,12 +665,17 @@ app.post("/auth/users", requireAdmin, async (req, res) => {
     );
     res.status(201).json({ message: "User created", data: result.rows[0] });
   } catch (err) {
+    // PostgreSQL error code 23505 = unique constraint violation
     if (err.code === "23505") return res.status(409).json({ message: "Username or email already exists" });
     res.status(500).json({ message: "Error creating user", error: err.message });
   }
 });
 
-// DELETE /auth/users/:id
+/**
+ * DELETE /auth/users/:id (Admin only)
+ * Deletes a user account by ID.
+ * Returns 404 if the user doesn't exist.
+ */
 app.delete("/auth/users/:id", requireAdmin, async (req, res) => {
   try {
     const result = await pool.query("DELETE FROM users WHERE id = $1 RETURNING username", [req.params.id]);
@@ -389,7 +686,11 @@ app.delete("/auth/users/:id", requireAdmin, async (req, res) => {
   }
 });
 
-// PUT /auth/users/:id/password
+/**
+ * PUT /auth/users/:id/password (Admin only)
+ * Resets a user's password.
+ * The new password is hashed before storage.
+ */
 app.put("/auth/users/:id/password", requireAdmin, async (req, res) => {
   try {
     const { newPassword } = req.body;
@@ -402,7 +703,16 @@ app.put("/auth/users/:id/password", requireAdmin, async (req, res) => {
   }
 });
 
-// GET /settings
+// ========================
+// SETTINGS ENDPOINTS
+// ========================
+
+/**
+ * GET /settings
+ * Returns the current sensor threshold settings.
+ * If no settings exist in the database, returns default values.
+ * This endpoint does NOT require authentication (public read access).
+ */
 app.get("/settings", async (req, res) => {
   try {
     const result = await pool.query("SELECT * FROM sensor_settings LIMIT 1");
@@ -415,13 +725,19 @@ app.get("/settings", async (req, res) => {
   }
 });
 
-// POST /settings
+/**
+ * POST /settings (Admin only)
+ * Updates sensor threshold settings.
+ * Detects if values have actually changed before writing to the database.
+ * Creates a new row if no settings exist, otherwise updates the existing row.
+ */
 app.post("/settings", requireAdmin, async (req, res) => {
   try {
     const { temp_min, temp_max, ph_min, ph_max, water_level_min, water_level_max } = req.body;
     const existing = await pool.query("SELECT * FROM sensor_settings LIMIT 1");
     let savedSettings;
     if (existing.rows.length > 0) {
+      // Only update if values have actually changed
       const changes = getChangedFields(existing.rows[0], { temp_min, temp_max, ph_min, ph_max, water_level_min, water_level_max });
       if (Object.keys(changes).length === 0) return res.json({ message: "No change", changed: false, data: existing.rows[0] });
       const keys = Object.keys(changes);
@@ -442,7 +758,10 @@ app.post("/settings", requireAdmin, async (req, res) => {
   }
 });
 
-// POST /settings/reset
+/**
+ * POST /settings/reset (Admin only)
+ * Resets all sensor thresholds to factory default values.
+ */
 app.post("/settings/reset", requireAdmin, async (req, res) => {
   try {
     const defaults = { temp_min: 20, temp_max: 31, ph_min: 6.5, ph_max: 8.5, water_level_min: 10, water_level_max: 100 };
@@ -467,7 +786,14 @@ app.post("/settings/reset", requireAdmin, async (req, res) => {
   }
 });
 
-// GET /settings/recipients
+// ========================
+// SMS RECIPIENT MANAGEMENT ENDPOINTS
+// ========================
+
+/**
+ * GET /settings/recipients (Admin only)
+ * Returns all authorized SMS recipients with their status.
+ */
 app.get("/settings/recipients", requireAdmin, async (req, res) => {
   try {
     const result = await pool.query("SELECT id, phone_number, name, is_active, created_at FROM authorized_recipients ORDER BY created_at DESC");
@@ -477,10 +803,16 @@ app.get("/settings/recipients", requireAdmin, async (req, res) => {
   }
 });
 
-// POST /settings/recipients
+/**
+ * POST /settings/recipients (Admin only)
+ * Adds a new SMS recipient.
+ * Validates phone number format: must be +639XXXXXXXXX (Philippine format).
+ * Returns 409 if the phone number already exists.
+ */
 app.post("/settings/recipients", requireAdmin, async (req, res) => {
   try {
     const { phone_number, name } = req.body;
+    // Validate Philippine phone number format
     if (!/^\+639\d{9}$/.test(phone_number)) return res.status(400).json({ error: "Invalid format: +639XXXXXXXXX" });
     const existing = await pool.query("SELECT * FROM authorized_recipients WHERE phone_number = $1", [phone_number]);
     if (existing.rows.length > 0) return res.status(409).json({ error: "Phone number already exists" });
@@ -491,7 +823,11 @@ app.post("/settings/recipients", requireAdmin, async (req, res) => {
   }
 });
 
-// PUT /settings/recipients/:id
+/**
+ * PUT /settings/recipients/:id (Admin only)
+ * Updates a recipient's name or active status.
+ * Uses updateOnlyIfChanged to avoid unnecessary database writes.
+ */
 app.put("/settings/recipients/:id", requireAdmin, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
@@ -505,7 +841,10 @@ app.put("/settings/recipients/:id", requireAdmin, async (req, res) => {
   }
 });
 
-// DELETE /settings/recipients/:id
+/**
+ * DELETE /settings/recipients/:id (Admin only)
+ * Removes an SMS recipient from the system.
+ */
 app.delete("/settings/recipients/:id", requireAdmin, async (req, res) => {
   try {
     const result = await pool.query("DELETE FROM authorized_recipients WHERE id = $1 RETURNING id", [req.params.id]);
@@ -516,13 +855,19 @@ app.delete("/settings/recipients/:id", requireAdmin, async (req, res) => {
   }
 });
 
-// POST /settings/recipients/test/:id
+/**
+ * POST /settings/recipients/test/:id (Admin only)
+ * Sends a test SMS to a recipient with current live sensor readings.
+ * Used to verify that a phone number is correct and SMS delivery is working.
+ * Includes all three sensor values with their current threshold status.
+ */
 app.post("/settings/recipients/test/:id", requireAdmin, async (req, res) => {
   try {
     const result = await pool.query("SELECT phone_number, name FROM authorized_recipients WHERE id = $1", [req.params.id]);
     if (result.rows.length === 0) return res.status(404).json({ error: "Not found" });
     const { phone_number, name } = result.rows[0];
 
+    // Fetch current settings and latest sensor reading to build the test message
     const settingsResult = await pool.query("SELECT * FROM sensor_settings LIMIT 1");
     const settings = settingsResult.rows[0] || { temp_min: 20, temp_max: 31, ph_min: 6.5, ph_max: 8.5, water_level_min: 10, water_level_max: 100 };
     const sensorResult = await pool.query("SELECT * FROM sensors ORDER BY timestamp DESC LIMIT 1");
@@ -545,7 +890,16 @@ app.post("/settings/recipients/test/:id", requireAdmin, async (req, res) => {
   }
 });
 
-// POST /logs
+// ========================
+// SYSTEM LOGS ENDPOINTS
+// ========================
+
+/**
+ * POST /logs
+ * Creates a new system log entry.
+ * Used internally to record sensor alerts, setting changes, and system events.
+ * Requires action and parameter; old_value and new_value are optional.
+ */
 app.post("/logs", async (req, res) => {
   try {
     const { action, parameter, old_value, new_value } = req.body;
@@ -560,7 +914,12 @@ app.post("/logs", async (req, res) => {
   }
 });
 
-// GET /system-logs
+/**
+ * GET /system-logs
+ * Returns paginated system log entries.
+ * Query parameters: page (default: 1), limit (default: 20, max: 100)
+ * Returns: { data: [], total: number, page: number, limit: number }
+ */
 app.get("/system-logs", async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page) || 1);
@@ -574,13 +933,24 @@ app.get("/system-logs", async (req, res) => {
   }
 });
 
-// POST /alert/device-disconnect
+// ========================
+// ALERT MANAGEMENT ENDPOINTS
+// ========================
+
+/**
+ * POST /alert/device-disconnect
+ * Called when the ESP32 device goes offline.
+ * Sends SMS alerts to all active recipients about the disconnection.
+ * Respects the SMS mute setting (smsMuteUntil).
+ * Logs the event to system_logs.
+ */
 app.post('/alert/device-disconnect', async (req, res) => {
   try {
     const { event_type, description, consecutive_failures } = req.body;
     const recipients = await pool.query('SELECT phone_number, name FROM authorized_recipients WHERE is_active = true');
     if (recipients.rows.length === 0) return res.status(200).json({ message: 'No active recipients', sent: 0 });
 
+    // Check if SMS alerts are currently muted
     if (smsMuteUntil && new Date() < new Date(smsMuteUntil)) {
       console.log('[' + new Date().toISOString() + '] SMS alerts muted until ' + smsMuteUntil + ', skipping disconnect alert');
       await pool.query('INSERT INTO system_logs (action, parameter, old_value, new_value) VALUES ($1, $2, $3, $4)', ['Device Disconnect Muted', 'ESP32', String(consecutive_failures || 0), 'Muted until ' + smsMuteUntil]);
@@ -604,7 +974,13 @@ app.post('/alert/device-disconnect', async (req, res) => {
   }
 });
 
-// POST /alert/mute
+/**
+ * POST /alert/mute
+ * Mutes or unmutes SMS alerts for a specified number of hours.
+ * Setting hours to null, 0, or negative unmutes alerts immediately.
+ * The mute state is stored in memory (smsMuteUntil variable).
+ * NOTE: Mute state is lost on server restart (not persisted to database).
+ */
 app.post('/alert/mute', async (req, res) => {
   try {
     const { hours } = req.body;
@@ -625,12 +1001,17 @@ app.post('/alert/mute', async (req, res) => {
   }
 });
 
-// GET /alert/mute-status
+/**
+ * GET /alert/mute-status
+ * Returns whether SMS alerts are currently muted and when the mute expires.
+ * Automatically clears expired mute states.
+ */
 app.get('/alert/mute-status', async (req, res) => {
   try {
     if (smsMuteUntil && new Date() < new Date(smsMuteUntil)) {
       return res.json({ muted: true, muteExpires: smsMuteUntil });
     }
+    // Clear expired mute state
     if (smsMuteUntil && new Date() >= new Date(smsMuteUntil)) {
       smsMuteUntil = null;
     }
@@ -640,7 +1021,16 @@ app.get('/alert/mute-status', async (req, res) => {
   }
 });
 
-// POST /activity-logs
+// ========================
+// ACTIVITY LOGS ENDPOINTS
+// ========================
+
+/**
+ * POST /activity-logs
+ * Records a user activity event (navigation, settings change, login, etc.).
+ * Used for audit trail and activity monitoring.
+ * Requires action_type; other fields are optional.
+ */
 app.post("/activity-logs", async (req, res) => {
   try {
     const { user_name, action_type, description, module } = req.body;
@@ -655,7 +1045,16 @@ app.post("/activity-logs", async (req, res) => {
   }
 });
 
-// GET /activity-logs
+/**
+ * GET /activity-logs
+ * Returns paginated, searchable, filterable activity logs.
+ * Query parameters:
+ *   - page: Page number (default: 1)
+ *   - search: Search in description or user_name (case-insensitive ILIKE)
+ *   - sortBy: "newest" or "oldest" (default: "newest")
+ *   - actionType: Filter by specific action type
+ * Returns: { data: [], total, page, limit, totalPages }
+ */
 app.get("/activity-logs", async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page) || 1);
@@ -665,6 +1064,7 @@ app.get("/activity-logs", async (req, res) => {
     const sortBy = req.query.sortBy === "oldest" ? "ASC" : "DESC";
     const actionType = req.query.actionType || "";
 
+    // Build dynamic WHERE clause for search and filter
     let where = [];
     let params = [];
     let paramCount = 1;
@@ -685,14 +1085,29 @@ app.get("/activity-logs", async (req, res) => {
 });
 
 // =============================================================================
-// Startup
+// SERVER STARTUP
 // =============================================================================
+// This function runs when the server starts and performs initialization:
+//   1. Tests the PostgreSQL connection
+//   2. Creates a default admin account if one doesn't exist
+//      (username: "admin", password: "Admin@123")
+//   3. Loads the last alert states from the database to restore
+//      alert deduplication state after server restart
+//   4. Checks if SkySMS API key is configured
+//   5. Starts the Express HTTP server on the configured port
+//   6. Sets up global error handlers for uncaught exceptions and rejections
+
+/**
+ * Initializes the server: connects to PostgreSQL, creates default admin if needed,
+ * restores alert state from database, and starts the HTTP listener.
+ */
 async function startServer() {
   try {
     const client = await pool.connect();
     try {
       console.log(`[${new Date().toISOString()}] PostgreSQL connected`);
 
+      // Create default admin account if it doesn't exist
       const adminExists = await client.query("SELECT id, password_hash FROM users WHERE username = $1", ["admin"]);
       if (adminExists.rows.length === 0) {
         const adminPassword = hashPassword("Admin@123");
@@ -710,6 +1125,7 @@ async function startServer() {
         }
       }
 
+      // Restore alert state from database (persists across server restarts)
       const lastAlertsResult = await client.query("SELECT * FROM last_alerts");
       lastAlertedState = {};
       for (const row of lastAlertsResult.rows) {
@@ -717,6 +1133,7 @@ async function startServer() {
       }
       console.log(`[${new Date().toISOString()}] Loaded ${lastAlertsResult.rows.length} alert states from DB`);
 
+      // Verify SMS configuration
       if (!process.env.SKYSMS_API_KEY) {
         console.warn(`[${new Date().toISOString()}] WARNING: SKYSMS_API_KEY not set. SMS alerts will fail.`);
       } else {
@@ -726,6 +1143,7 @@ async function startServer() {
       client.release();
     }
 
+    // Start listening for HTTP requests on all network interfaces
     app.listen(PORT, "0.0.0.0", () => {
       console.log(`[${new Date().toISOString()}] Server running on http://0.0.0.0:${PORT}`);
     });
@@ -735,12 +1153,28 @@ async function startServer() {
   }
 }
 
+// Start the server
 startServer();
 
+// =============================================================================
+// GLOBAL ERROR HANDLERS
+// =============================================================================
+// These handlers catch errors that escape try/catch blocks to prevent
+// the server from crashing silently.
+
+/**
+ * Catches unhandled Promise rejections and logs them.
+ * This prevents the server from crashing on async errors that weren't caught.
+ */
 process.on("unhandledRejection", (reason) => {
   console.error(`[${new Date().toISOString()}] Unhandled rejection:`, reason);
 });
 
+/**
+ * Catches uncaught synchronous exceptions.
+ * Logs the error and exits the process to allow process managers
+ * (like PM2 or systemd) to restart the server cleanly.
+ */
 process.on("uncaughtException", (err) => {
   console.error(`[${new Date().toISOString()}] Uncaught exception:`, err.message);
   process.exit(1);

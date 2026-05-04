@@ -1,3 +1,23 @@
+// =============================================================================
+// FILE: src/pages/LogsPage.tsx
+// =============================================================================
+// PURPOSE: System logs page with parameter filtering and PDF export.
+//
+// This page displays system log entries in a table format with:
+//   1. Parameter filter buttons: All / Temperature / pH Level / Water Level
+//   2. Paginated table showing timestamp, parameter, old value, new value, action
+//   3. PDF export functionality (via jsPDF + autoTable)
+//
+// PDF EXPORT FEATURES:
+//   - Title header with generation timestamp
+//   - Summary section with total entries and per-parameter counts
+//   - Formatted table with alternating row colors
+//   - Page numbers and footer on each page
+//   - Filename includes date (e.g., CRAYvings_System_Logs_2025-01-15.pdf)
+//
+// DATA: System logs from SensorProvider (auto-polled every 5 seconds)
+// =============================================================================
+
 import { useState, useMemo, useCallback } from "react";
 import { FileText, Download, Clock, Thermometer, Waves, FlaskConical } from "lucide-react";
 import { useSensors } from "../hooks/useSensors";

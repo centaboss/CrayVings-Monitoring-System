@@ -1,3 +1,18 @@
+// =============================================================================
+// FILE: src/components/Sidebar.tsx
+// =============================================================================
+// PURPOSE: Vertical sidebar navigation component.
+//
+// NOTE: This component is NOT currently used in the app.
+// The navigation is defined inline in App.tsx's DashboardLayout component.
+// This file may be a legacy component or an alternative sidebar design.
+//
+// Displays:
+//   - App logo at the top
+//   - Navigation buttons for each page with icons and labels
+//   - Active page highlighting with orange accent color
+// =============================================================================
+
 import logo from "../assets/craybitch without background.png";
 import {
   LayoutDashboard,
@@ -10,6 +25,7 @@ import {
 } from "lucide-react";
 import type { MenuKey } from "../types";
 
+// Navigation menu items with icons
 const menuItems: { label: MenuKey; icon: React.ReactNode }[] = [
   { label: "Home", icon: <Home size={15} /> },
   { label: "Dashboard", icon: <LayoutDashboard size={15} /> },
@@ -25,9 +41,15 @@ type Props = {
   setActiveMenu: (menu: MenuKey) => void;
 };
 
+/**
+ * Sidebar navigation component with logo and menu buttons.
+ * Active menu item is highlighted with orange background and bold text.
+ * NOTE: This component is not currently used; navigation is inline in App.tsx.
+ */
 export default function Sidebar({ activeMenu, setActiveMenu }: Props) {
   return (
     <div className="w-24 bg-[#f5efe9] border-r border-[#eadfd6] min-h-screen flex flex-col items-center pt-4">
+      {/* App logo */}
       <div className="w-14 h-14 rounded-full bg-white flex items-center justify-center overflow-hidden border-2 border-[#e9d3c6] mb-4 text-[10px] font-bold text-[#c2410c]">
         <img
       src={logo}
@@ -36,6 +58,7 @@ export default function Sidebar({ activeMenu, setActiveMenu }: Props) {
     />
       </div>
 
+      {/* Navigation buttons */}
       <div className="w-full flex flex-col gap-1 px-2">
         {menuItems.map((item) => {
           const isActive = activeMenu === item.label;

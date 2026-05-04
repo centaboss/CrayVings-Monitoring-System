@@ -1,3 +1,24 @@
+// =============================================================================
+// FILE: src/pages/SensorsPage.tsx
+// =============================================================================
+// PURPOSE: Detailed sensor status page showing individual sensor readings.
+//
+// This page provides a sensor-focused view with:
+//   1. Connection status header (ONLINE/OFFLINE/CONNECTING indicator)
+//   2. Three sensor cards showing current value, status icon, and threshold range
+//   3. Connection Info panel (device ID, status)
+//   4. Last Update panel (timestamp, relative time like "2m ago")
+//
+// Each sensor card shows:
+//   - Icon and color-coded theme
+//   - Current reading value with unit
+//   - Green checkmark (in range) or red X (out of range)
+//   - Configured threshold range
+//   - Warning text if reading is outside the range
+//
+// DATA: Real-time from SensorProvider
+// =============================================================================
+
 import { useMemo } from "react";
 import { 
   Thermometer, 
@@ -12,6 +33,10 @@ import {
 import { useSensors } from "../hooks/useSensors";
 import { getSettingsThresholds, getThresholdStatus } from "../types";
 
+/**
+ * Formats a timestamp into a human-readable relative time string.
+ * e.g., "5s ago", "3m ago", "2h ago", "1d ago"
+ */
 function formatTimeAgo(timestamp: string): string {
   const date = new Date(timestamp);
   if (isNaN(date.getTime())) return "Invalid date";

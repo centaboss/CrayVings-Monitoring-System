@@ -1,3 +1,24 @@
+// =============================================================================
+// FILE: src/components/FloatingAlert.tsx
+// =============================================================================
+// PURPOSE: Floating toast notification system for real-time alerts.
+//
+// This file provides:
+//   - FloatingAlertProvider: Context provider that manages notification state
+//   - FloatingAlertContainer: Renders all active notifications in the top-right
+//   - FloatingAlertItem: Individual notification card with auto-dismiss and
+//     mute options for device disconnect alerts
+//
+// NOTIFICATION BEHAVIOR:
+//   - Auto-dismiss after 5 seconds with a slide-out animation
+//   - Play alert sound when added (low for min threshold, high for max)
+//   - Device disconnect notifications show SMS mute options
+//   - Multiple notifications can be displayed simultaneously
+//   - Duplicate notifications for the same sensor+threshold are replaced
+//
+// MOUNTED IN: App.tsx (always visible, outside page routing)
+// =============================================================================
+
 import { useState, useEffect, useCallback, type ReactNode } from "react";
 import { X, AlertTriangle, AlertCircle, BellOff } from "lucide-react";
 import { playLowAlertSound, playHighAlertSound } from "../utils/playAlertSound";
@@ -8,15 +29,28 @@ import {
   type AlertNotification
 } from "../hooks/useFloatingAlerts";
 
+// Available mute durations in hours for SMS alert silencing
 const MUTE_OPTIONS = [1, 2, 4, 6, 8, 12, 24];
 
 interface FloatingAlertProviderProps {
   children: ReactNode;
 }
 
+// ========================
+// FLOATING ALERT PROVIDER
+// ========================
+/**
+ * Context provider that manages the floating notification state.
+ * Handles adding notifications (with sound), removing them, and clearing all.
+ * Plays appropriate alert sounds based on threshold direction (min/max).
+ */
 export function FloatingAlertProvider({ children }: FloatingAlertProviderProps) {
   const [notifications, setNotifications] = useState<AlertNotification[]>([]);
 
+  /**
+   * Plays the appropriate alert sound based on threshold type.
+   * Low threshold = lower pitch, high threshold = higher pitch.
+   */
   const playAlertSound = useCallback(async (threshold: "min" | "max") => {
     try {
       if (threshold === "min") {
@@ -25,10 +59,16 @@ export function FloatingAlertProvider({ children }: FloatingAlertProviderProps) 
         await playHighAlertSound();
       }
     } catch {
-      // Silent fail - audio may not work
+      // Silent fail - audio may not work (browser policy)
     }
   }, []);
 
+  /**
+   * Adds a new notification to the display.
+   * Plays sound BEFORE updating state so sound isn't delayed by React rendering.
+   * Replaces any existing notification for the same sensor+threshold.
+   * Skips sound for device notifications (sound is handled by DeviceConnectionMonitor).
+   */
   const addNotification = useCallback(async (notification: Omit<AlertNotification, "id">) => {
     const id = `${notification.parameter}-${notification.threshold}-${Date.now()}`;
     
@@ -39,7 +79,7 @@ export function FloatingAlertProvider({ children }: FloatingAlertProviderProps) 
     
     // Always add new notification (allow multiple same alerts)
     setNotifications((prev) => {
-      // Remove old notification for same sensor if exists
+      // Remove old notification for same sensor if exists (replace with newer one)
       const filtered = prev.filter(
         (n) => !(n.parameter === notification.parameter && n.threshold === notification.threshold)
       );
@@ -47,10 +87,12 @@ export function FloatingAlertProvider({ children }: FloatingAlertProviderProps) 
     });
   }, [playAlertSound]);
 
+  /** Removes a specific notification by ID. */
   const removeNotification = useCallback((id: string) => {
     setNotifications((prev) => prev.filter((n) => n.id !== id));
   }, []);
 
+  /** Clears all active notifications. */
   const clearNotifications = useCallback(() => {
     setNotifications([]);
   }, []);
@@ -62,6 +104,13 @@ export function FloatingAlertProvider({ children }: FloatingAlertProviderProps) 
   );
 }
 
+// ========================
+// FLOATING ALERT CONTAINER
+// ========================
+/**
+ * Renders all active notifications as a vertical stack in the top-right corner.
+ * Positioned with fixed positioning and high z-index to stay on top of all content.
+ */
 export function FloatingAlertContainer() {
   const { notifications, removeNotification } = useFloatingAlerts();
 
@@ -78,6 +127,17 @@ export function FloatingAlertContainer() {
   );
 }
 
+// ========================
+// FLOATING ALERT ITEM
+// ========================
+/**
+ * Individual notification card component.
+ * Features:
+ *   - Auto-dismisses after 5 seconds with a slide-out animation
+ *   - Shows warning or critical styling based on notification type
+ *   - Device disconnect alerts include SMS mute options
+ *   - Close button for manual dismissal
+ */
 interface FloatingAlertItemProps {
   notification: AlertNotification;
   onClose: () => void;
@@ -88,6 +148,7 @@ function FloatingAlertItem({ notification, onClose }: FloatingAlertItemProps) {
   const [showMuteOptions, setShowMuteOptions] = useState(false);
   const [muting, setMuting] = useState(false);
 
+  // Auto-dismiss after 5 seconds
   useEffect(() => {
     const timer = setTimeout(() => {
       setIsExiting(true);
@@ -97,11 +158,13 @@ function FloatingAlertItem({ notification, onClose }: FloatingAlertItemProps) {
     return () => clearTimeout(timer);
   }, [onClose]);
 
+  // Manual close with exit animation
   const handleClose = () => {
     setIsExiting(true);
     setTimeout(onClose, 300);
   };
 
+  /** Mutes SMS alerts for the specified number of hours. */
   const handleMute = useCallback(async (hours: number) => {
     setMuting(true);
     await muteAlerts(hours);
@@ -111,6 +174,7 @@ function FloatingAlertItem({ notification, onClose }: FloatingAlertItemProps) {
     setTimeout(onClose, 300);
   }, [onClose]);
 
+  // Dynamic styling based on notification severity
   const isWarning = notification.type === "warning";
   const bgColor = isWarning ? "bg-amber-50" : "bg-red-50";
   const borderColor = isWarning ? "border-amber-300" : "border-red-400";
@@ -126,6 +190,7 @@ function FloatingAlertItem({ notification, onClose }: FloatingAlertItemProps) {
         ${isExiting ? "opacity-0 translate-x-full" : "opacity-100 translate-x-0"}
       `}
     >
+      {/* Notification content: icon, message, close button */}
       <div className="flex items-start gap-3">
         <div className={`flex-shrink-0 ${iconColor}`}>
           {isWarning ? <AlertTriangle size={18} /> : <AlertCircle size={18} />}
@@ -134,6 +199,7 @@ function FloatingAlertItem({ notification, onClose }: FloatingAlertItemProps) {
           <p className={`text-sm font-medium ${textColor} break-words`}>
             {notification.message}
           </p>
+          {/* Show sensor value details (hide for device connection alerts) */}
           {notification.parameter !== "device" && (
             <p className="text-xs text-gray-500 mt-0.5">
               Current: {notification.value} - Threshold: {notification.threshold === "min" ? "below min" : "above max"}
@@ -141,6 +207,7 @@ function FloatingAlertItem({ notification, onClose }: FloatingAlertItemProps) {
           )}
         </div>
         <div className="flex-shrink-0 flex items-center gap-1">
+          {/* SMS mute button - only shown for device disconnect alerts */}
           {notification.parameter === "device" && (
             <button
               onClick={() => setShowMuteOptions(!showMuteOptions)}
@@ -159,6 +226,7 @@ function FloatingAlertItem({ notification, onClose }: FloatingAlertItemProps) {
         </div>
       </div>
 
+      {/* SMS mute options panel - expandable when bell icon is clicked */}
       {showMuteOptions && (
         <div className="flex flex-wrap gap-1 pt-1 border-t border-gray-200/50">
           <span className="text-xs text-gray-500 w-full mb-1">Mute SMS alerts for:</span>

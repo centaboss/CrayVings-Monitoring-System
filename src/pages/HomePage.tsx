@@ -1,3 +1,23 @@
+// =============================================================================
+// FILE: src/pages/HomePage.tsx
+// =============================================================================
+// PURPOSE: Landing/overview page of the CRAYvings Monitoring System.
+//
+// This is the default page shown after login. It provides:
+//   1. Hero banner with connection status badge and tank safety status
+//   2. Three gradient stat cards showing live temperature, pH, and water level
+//   3. System alerts sidebar showing active threshold breaches
+//   4. Quick controls panel (refresh data, dismiss alerts, go to settings)
+//   5. Key metrics summary section with optimal ranges
+//
+// The page is a high-level overview - users can drill down into specific
+// data via the sidebar navigation (Dashboard, Sensors, Historical Data, etc.).
+//
+// DATA SOURCES:
+//   - useSensors hook (sensor data, settings, connection status)
+//   - Threshold evaluation for tank safety assessment
+// =============================================================================
+
 import { useState, useMemo } from "react";
 import { Thermometer, Waves, FlaskConical, AlertTriangle, AlertCircle, CheckCircle, RefreshCw, BellOff, Settings } from "lucide-react";
 import type { MenuKey } from "../types";

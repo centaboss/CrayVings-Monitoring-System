@@ -1,3 +1,25 @@
+// =============================================================================
+// FILE: src/pages/HistoricalDataPage.tsx
+// =============================================================================
+// PURPOSE: Historical data analysis page with time-range filtering.
+//
+// This page allows users to view sensor trends over different time periods:
+//   1. Time range selector: 1 Hour / 6 Hours / 24 Hours / All Time
+//   2. Three summary cards showing Min/Average/Max for each sensor
+//   3. Three full-width line charts (vertical layout for readability)
+//
+// FEATURES:
+//   - Dynamically fetches more data from the backend for longer time ranges
+//   - Uses AbortController to cancel stale requests when switching ranges
+//   - Filters and sorts data client-side for the selected time window
+//   - Shows loading skeletons during data fetch
+//
+// DATA FLOW:
+//   - Short ranges (1h, 6h): Uses locally cached history from SensorProvider
+//   - Long ranges (24h, all): Fetches additional data directly from API
+//   - Data is filtered by timestamp cutoff based on selected range
+// =============================================================================
+
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import {
   History,
@@ -16,6 +38,10 @@ import type { ChartPoint } from "../types";
 
 type TimeRange = "1h" | "6h" | "24h" | "all";
 
+/**
+ * Calculates min, max, and average statistics for each sensor parameter.
+ * Returns null if no data is available.
+ */
 function getStats(data: { temperature?: number | string; ph?: number | string; water_level?: number | string }[]) {
   if (!data || data.length === 0) return null;
 
