@@ -21,7 +21,8 @@ This can help reduce risks caused by poor water conditions and improve overall m
 - Help improve water quality management in aquaculture
 - Reduce manual checking and improve consistency
 - Support better decision-making for tank or pond maintenance
-- Provide instant alerts when parameters go out of safe range
+- Provide instant alerts (floating popups, sound, and SMS) when parameters go out of safe range
+- Notify users immediately when the ESP32 device disconnects
 
 ---
 
@@ -32,14 +33,18 @@ This can help reduce risks caused by poor water conditions and improve overall m
 - **ESP32-based data collection** - Wireless sensor data transmission with WiFiMulti + validation
 - **Web dashboard** - Responsive React UI with icon-based navigation
 - **Database storage** - PostgreSQL for historical data
-- **Smart alerts** - Threshold-based notifications with cooldown (3 sensors only)
-- **SMS notifications** - Critical alerts via SkySMS API
+- **Smart connection detection** - Connection status based on actual sensor data timestamp, not API poll time
+- **Offline error display** - When ESP32 disconnects, all pages show error state (same as when server is down)
+- **Smart alerts** - Floating popup notifications with threshold-based alerts and cooldown
+- **SMS notifications** - Critical threshold alerts and device disconnect alerts via SkySMS API
+- **SMS mute/sleep** - Pause SMS alerts for 1, 2, 4, 6, 8, 12, or 24 hours
+- **Disconnect/reconnect alerts** - Floating popup, sound, and activity log when ESP32 goes offline or comes back online
 - **Recipient management** - Manage SMS alert recipients
 - **Custom alert sounds** - Audio alerts via Web Audio API
 - **PDF export** - Export system logs to PDF (LogsPage)
-- **Activity logging** - Track user interactions
-- **Smart save logic** - Only writes to database when data actually changes (prevents unnecessary updates)
-- **Token expiration** - Auth tokens expire after 24 hours for improved security
+- **Activity logging** - Track user interactions including device connect/disconnect events
+- **Smart save logic** - Only writes to database when data actually changes
+- **Token expiration** - Auth tokens expire after 24 hours
 
 ### Monitoring Parameters
 | Parameter | Sensor | Safe Range |
@@ -49,24 +54,24 @@ This can help reduce risks caused by poor water conditions and improve overall m
 | pH Level | pH Probe | 6.5 - 8.5 |
 
 ### Dashboard Pages
-- **Home** - Overview and quick stats
-- **Dashboard** - Live readings and charts
-- **Sensors** - Individual sensor details
+- **Home** - Overview, quick stats, connection status, system alerts
+- **Dashboard** - Live readings, trend charts, tank status, sensor hub status
+- **Sensors** - Individual sensor details with threshold info and connection status
 - **Alerts** - Alert history with filtering (Alert/Change)
 - **Historical Data** - Trend charts with time filtering (1h, 6h, 24h, all time)
-- **Activity Logs** - User activity tracking
+- **Activity Logs** - User activity tracking including device connect/disconnect events
 - **Logs** - System event logs with parameter filtering and PDF export
-- **Settings** - Configure thresholds and manage SMS recipients
+- **Settings** - Configure thresholds, manage SMS recipients, mute/sleep SMS alerts, user management
 
 ---
 
 ## Technologies Used
 
 ### Hardware
-- **ESP32 DevKit V1** with WiFiMulti support (auto-connects to best available network)
-- **DS18B20** - Temperature sensor (GPIO4, OneWire protocol)
-- **HC-SR04** - Ultrasonic distance sensor (GPIO5, GPIO18, 5-sample averaging)
-- **pH Probe** - pH measurement (GPIO34, 10-sample median filter, calibration offset)
+- **ESP32 DevKit V1** with WiFiMulti support
+- **DS18B20** - Temperature sensor (GPIO4, OneWire)
+- **HC-SR04** - Ultrasonic distance sensor (GPIO5, GPIO18)
+- **pH Probe** - pH measurement (GPIO34)
 
 ### Software
 | Component | Technology | Version |
@@ -79,7 +84,7 @@ This can help reduce risks caused by poor water conditions and improve overall m
 | PDF Export | jsPDF + autoTable | 4.2 + 5.0 |
 | Routing | react-router-dom | 7.14 |
 | HTTP Client | Axios | 1.15 |
-| Backend | Express.js (raw SQL + smart change detection) | 5.2 |
+| Backend | Express.js | 5.2 |
 | Database | PostgreSQL | 15+ |
 | Connection Pool | pg | 8.20 |
 | Validation | Zod | 4.3 |
@@ -91,9 +96,9 @@ This can help reduce risks caused by poor water conditions and improve overall m
 
 ```
 Sensors → ESP32 → Wi-Fi → Express API → PostgreSQL → React Dashboard
-                    │                              │
-                    │                              │
-                    └─────────── Alerts ←─────────┘
+                     │                              │
+                     ▼                              ▼
+                SMS via SkySMS ←───── Alert System (popup + sound + activity log)
 ```
 
 ### Data Flow
@@ -101,7 +106,9 @@ Sensors → ESP32 → Wi-Fi → Express API → PostgreSQL → React Dashboard
 2. **ESP32** collects and sends data via HTTP POST
 3. **Express API** validates and stores in PostgreSQL
 4. **React Dashboard** polls for data every 3 seconds
-5. **Alerts** triggered when values exceed thresholds
+5. **Connection check** compares sensor data timestamp against current time
+6. **Alerts** triggered when values exceed thresholds or ESP32 disconnects
+7. **SMS** sent to active recipients for critical events (unless muted)
 
 ---
 
@@ -109,10 +116,9 @@ Sensors → ESP32 → Wi-Fi → Express API → PostgreSQL → React Dashboard
 
 ### Hardware
 - ESP32 DevKit V1
-- Water temperature sensor (DS18B20)
-- Water level sensor (HC-SR04)
+- DS18B20 temperature sensor
+- HC-SR04 water level sensor
 - pH probe/sensor
-- Optional: DO sensor, ammonia sensor
 
 ### Software
 - Node.js 18+
@@ -123,7 +129,7 @@ Sensors → ESP32 → Wi-Fi → Express API → PostgreSQL → React Dashboard
 
 ## Quick Start
 
-### 1. Clone and Install
+### 1. Install Dependencies
 
 ```bash
 npm install
@@ -131,34 +137,24 @@ npm install
 
 ### 2. Configure Environment
 
-Create a `.env` file in the project root:
+Create a `.env` file:
 
 ```bash
-# Server Configuration
 PORT=3000
-
-# PostgreSQL Configuration
 PG_HOST=localhost
 PG_PORT=5432
 PG_DATABASE=crayvings_monitoring_system_db
 PG_USER=postgres
 PG_PASSWORD=your_password
-
-# CORS
 ALLOWED_ORIGINS=http://localhost:5173
+SKYSMS_API_KEY=your_skysms_api_key_here
+SKYSMS_API_URL=https://skysms.skyio.site/api/v1
 ```
 
 ### 3. Start Backend
 
 ```bash
 npm run server
-# or: node server.cjs
-```
-
-Expected output:
-```
-Server started on port 3000
-PostgreSQL connected and table ready
 ```
 
 ### 4. Start Frontend
@@ -171,14 +167,9 @@ Dashboard opens at http://localhost:5173
 
 ### 5. Connect ESP32
 
-Configure in Arduino IDE (19200 baud rate):
-
+Configure server URL in `esp32code.ino`:
 ```cpp
-// ESP32 code - esp32code.ino
-const char* serverName = "http://192.168.1.20:3000/sensor";
-
-// Add your WiFi networks (WiFiMulti auto-connects)
-wifiMulti.addAP("SSID", "password");
+const char* serverName = "http://<your-server-ip>:3000/sensor";
 ```
 
 ---
@@ -186,55 +177,42 @@ wifiMulti.addAP("SSID", "password");
 ## Configuration
 
 ### Setting Thresholds
+Navigate to **Settings** to configure temperature, pH, and water level min/max values.
 
-Navigate to **Settings** in the dashboard to configure:
-- Temperature min/max
-- pH min/max
-- Water level min/max
-- Uses smart save logic - only writes to DB when values actually change
+### SMS Mute / Sleep
+Two ways to pause SMS alerts:
+1. **Floating alert popup** — Click the bell icon on disconnect alerts (1h/2h/4h/6h/8h/12h/24h)
+2. **Settings page** — "SMS Alert Sleep / Mute" section with all durations and unmute button
 
-### Alert Customization
-
-- Toggle alert sounds on/off
-- Upload custom alert sounds
-- Adjust alert cooldown (10 seconds default)
+While muted, disconnect alerts still show as popups and are logged, but SMS is not sent.
 
 ### SMS Notifications
-
-- **SkySMS integration** for critical alerts
-- **Recipient management** in Settings page
-- **SMS cooldown** to prevent spam (5 seconds default)
-- **Test SMS** feature to verify configuration
+- SkySMS integration for critical alerts and device disconnect alerts
+- Recipient management in Settings page
+- Test SMS feature to verify configuration
 
 ### Smart Save Logic
-
-The system prevents unnecessary database writes using explicit change detection:
-- **Settings**: Only updates fields that differ from current DB values
-- **Sensor data**: Skips duplicate readings (compares device_id, temperature, water_level, ph)
-- **Password reset**: Checks if new password equals current before updating
-- **Recipients**: Only updates name/is_active when changed
-
-Comparison handles: null/undefined, numeric strings vs numbers, dates (ISO string), JSON objects (sorted keys)
+Only writes to database when values actually change. Handles null/undefined, numeric strings, dates, and JSON objects.
 
 ---
 
 ## API Endpoints
 
-| Endpoint | Method | Description | Query Params |
-|----------|--------|-------------|--------------|
-| `/health` | GET | Server health check | - |
-| `/sensor` | POST | Submit sensor data | - |
-| `/sensor/latest` | GET | Get latest reading | - |
-| `/sensor` | GET | Get history | `limit` (1-1000, default: 300) |
-| `/settings` | GET | Get thresholds | - |
-| `/settings` | POST | Update thresholds | - |
-| `/settings/recipients` | GET | Get SMS recipients | - |
-| `/settings/recipients` | POST | Add new recipient | - |
-| `/settings/recipients/:id` | PUT | Update recipient | - |
-| `/settings/recipients/:id` | DELETE | Delete recipient | - |
-| `/settings/recipients/test/:id` | POST | Send test SMS | - |
-| `/system-logs` | GET | Get system logs | `page`, `limit` |
-| `/activity-logs` | GET | Get activity logs | `page`, `limit`, `search`, `sortBy`, `actionType` |
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Server health check |
+| `/sensor` | POST | Submit sensor data |
+| `/sensor/latest` | GET | Get latest reading |
+| `/sensor` | GET | Get history (`limit`: 1-1000) |
+| `/settings` | GET/POST | Get/update thresholds |
+| `/settings/recipients` | GET/POST | List/add SMS recipients |
+| `/settings/recipients/:id` | PUT/DELETE | Update/delete recipient |
+| `/settings/recipients/test/:id` | POST | Send test SMS |
+| `/alert/device-disconnect` | POST | Send disconnect alert SMS |
+| `/alert/mute` | POST | Mute SMS alerts (`{ hours }`) |
+| `/alert/mute-status` | GET | Check mute status |
+| `/system-logs` | GET | Get system logs |
+| `/activity-logs` | GET/POST | Get/create activity logs |
 
 ---
 
@@ -242,47 +220,62 @@ Comparison handles: null/undefined, numeric strings vs numbers, dates (ISO strin
 
 ```
 src/
-├── api/client.ts          # API client (Axios)
-├── assets/              # Static assets
-│   └── craybitch without background.png
-├── components/           # UI components
-│   ├── Header.tsx
-│   ├── Sidebar.tsx
-│   ├── StatCard.tsx
-│   ├── TrendCard.tsx
-│   └── FloatingAlert.tsx
-├── contexts/             # React contexts
+├── api/client.ts              # API client functions
+├── components/
+│   ├── FloatingAlert.tsx      # Popup alerts with mute options
+│   └── DeviceConnectionMonitor.tsx  # ESP32 connect/disconnect monitoring
+├── contexts/
 │   ├── SensorContext.tsx
-│   └── SensorProvider.tsx
-├── hooks/                # Custom hooks
+│   └── SensorProvider.tsx     # Data polling + stale detection
+├── hooks/
 │   ├── useSensors.ts
 │   ├── useThresholdAlert.ts
 │   └── useFloatingAlerts.ts
-├── pages/               # Page components
-│   ├── HomePage.tsx
+├── pages/
+│   ├── HomePage.tsx           # Error state when ESP32 offline
 │   ├── DashboardPage.tsx
 │   ├── SensorsPage.tsx
-│   ├── AlertsPage.tsx       # Alert/Change filtering
+│   ├── AlertsPage.tsx
 │   ├── HistoricalDataPage.tsx
-│   ├── SettingsPage.tsx
-│   ├── LogsPage.tsx         # Parameter filtering + PDF export
+│   ├── SettingsPage.tsx       # Thresholds + recipients + SMS mute + users
+│   ├── LogsPage.tsx
 │   └── ActivityLogsPage.tsx
-├── types/index.ts        # TypeScript types
-├── utils/              # Utilities
-│   └── playAlertSound.ts
+├── types/index.ts
+├── utils/playAlertSound.ts
 ├── App.tsx
 ├── main.tsx
 └── index.css
-server.cjs              # Express backend (832 lines)
-esp32code/
-└── esp32code.ino       # ESP32 firmware
+server.cjs                     # Express backend
+esp32code/esp32code.ino        # ESP32 firmware
 ```
 
 ---
 
-## Troubleshooting
+## Connection & Offline Handling
 
-### Common Issues
+### How Connection Status Works
+- Frontend polls `GET /sensor/latest` every 3 seconds
+- `lastUpdate` uses the **actual sensor data timestamp** (not poll time)
+- If sensor data is older than 15 seconds → status = **offline**
+- After 5 consecutive failed API requests → status = **offline**
+
+### When ESP32 Disconnects
+1. Sensor data becomes stale (older than 15s)
+2. `error` state set → all pages show error UI
+3. Floating popup: "ESP32 device disconnected — no data received"
+4. Critical alert sound plays
+5. Activity log: `device_disconnect`
+6. SMS sent to active recipients (unless muted)
+
+### When ESP32 Reconnects
+1. Fresh data arrives → `error` cleared, status = **online**
+2. Pages show live readings automatically
+3. Floating popup: "ESP32 device reconnected — data restored"
+4. Activity log: `device_connect`
+
+---
+
+## Troubleshooting
 
 | Issue | Solution |
 |-------|----------|
@@ -291,20 +284,14 @@ esp32code/
 | CORS error | Add frontend port to ALLOWED_ORIGINS |
 | "Device offline" | Check ESP32 WiFi connection |
 | SMS not sending | Verify SKYSMS_API_KEY in .env |
+| AudioContext warning | Click anywhere on the page to unlock audio |
 
 ### Debug Commands
-
 ```bash
-# Health check
 curl http://localhost:3000/health
-
-# Get latest sensor
 curl http://localhost:3000/sensor/latest
-
-# Test sensor submission
-curl -X POST http://localhost:3000/sensor \
-  -H "Content-Type: application/json" \
-  -d '{"device_id":"TEST","temperature":25,"water_level":75,"ph":7}'
+curl -X POST http://localhost:3000/sensor -H "Content-Type: application/json" -d '{"device_id":"TEST","temperature":25,"water_level":75,"ph":7}'
+curl -X POST http://localhost:3000/alert/mute -H "Content-Type: application/json" -d '{"hours": 4}'
 ```
 
 ---
@@ -315,7 +302,7 @@ curl -X POST http://localhost:3000/sensor \
 npm run build
 ```
 
-Output in `dist/` folder - ready for deployment.
+Output in `dist/` folder.
 
 ---
 
@@ -327,4 +314,4 @@ ISC
 
 ## Support
 
-For issues or questions, please check the HOW_IT_WORKS.md for detailed documentation.
+For detailed documentation see HOW_IT_WORKS.md. For SMS configuration see SMS_HOWTO.md.

@@ -101,16 +101,19 @@ function useSensorDataPolling(): SensorDataState & { refetch: () => void } {
         fetchSensorHistory(1000, abortControllerRef.current.signal),
       ]);
 
-      if (latest) {
-        consecutiveFailuresRef.current = 0;
-        const now = new Date();
+      if (latest && latest.timestamp) {
+        consecutiveFailuresRef.current = 0
+        const sensorTime = new Date(latest.timestamp);
+        const gap = Date.now() - sensorTime.getTime();
+        const isStale = gap > OFFLINE_THRESHOLD;
+
         setState({
           data: latest,
           history: historyData,
           loading: false,
-          error: null,
-          connectionStatus: computeConnectionStatus(false, now),
-          lastUpdate: now,
+          error: isStale ? "ESP32 device is offline. Last data received is stale." : null,
+          connectionStatus: computeConnectionStatus(false, sensorTime),
+          lastUpdate: sensorTime,
           consecutiveFailures: 0,
         });
       } else {
@@ -246,12 +249,12 @@ function useSettingsManager(): SensorSettingsState & { refetch: () => void; save
       }, 2000);
     } catch {
       setState((prev) => ({
-        ...prev,
-        settingsSaving: false,
-        saveError: "Failed to save settings",
-      }));
-    }
-  }, []);
+      ...prev,
+      settingsSaving: false,
+      saveError: "Failed to save settings",
+    }));
+  }
+}, []);
 
   const refetch = useCallback(() => {
     setState((prev) => ({ ...prev, settingsLoading: true, settingsError: null, saveError: null }));

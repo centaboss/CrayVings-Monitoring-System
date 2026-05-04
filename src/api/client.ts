@@ -195,6 +195,49 @@ export interface ActivityLogsResponse {
   totalPages: number;
 }
 
+
+export async function sendDeviceDisconnectAlert(
+  description?: string,
+  consecutiveFailures?: number,
+  signal?: AbortSignal
+): Promise<{ sent: number; total: number } | null> {
+  try {
+    const response = await client.post(
+      '/alert/device-disconnect',
+      { event_type: 'disconnect', description, consecutive_failures: consecutiveFailures },
+      { signal }
+    );
+    return response.data;
+  } catch {
+    console.error('Failed to send device disconnect alert');
+    return null;
+  }
+}
+
+export async function muteAlerts(hours: number | null, signal?: AbortSignal): Promise<{ muted: boolean; muteExpires: string | null } | null> {
+  try {
+    const response = await client.post(
+      '/alert/mute',
+      { hours },
+      { signal }
+    );
+    return response.data;
+  } catch {
+    console.error('Failed to set alert mute');
+    return null;
+  }
+}
+
+export async function getMuteStatus(signal?: AbortSignal): Promise<{ muted: boolean; muteExpires: string | null } | null> {
+  try {
+    const response = await client.get('/alert/mute-status', { signal });
+    return response.data;
+  } catch {
+    console.error('Failed to get mute status');
+    return null;
+  }
+}
+
 export async function logActivity(
   entry: ActivityLogEntry,
   signal?: AbortSignal

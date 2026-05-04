@@ -1,28 +1,65 @@
 # SMS Configuration How-To Guide
 
-This guide explains how to customize all SMS features in the CRAYvings Monitoring System.
+This guide explains how to customize all SMS features in the CRAYvings Monitoring System, including threshold alerts, device disconnect alerts, mute/sleep, and recipient management.
 
 ## Quick Reference
 
 | What you want to change | Where to edit |
 |------------------------|---------------|
-| Warning SMS message | `server.cjs` → `SMS_CONFIG.messages.warning` (line ~45) |
-| Critical SMS message | `server.cjs` → `SMS_CONFIG.messages.critical` (line ~52) |
-| Hourly update message | `server.cjs` → `SMS_CONFIG.messages.hourlyUpdate` (line ~60) |
-| Sensor display names | `server.cjs` → `SMS_CONFIG.sensorNames` (line ~72) |
-| Recipient phone numbers | Database: `authorized_recipients` table OR Settings page in dashboard |
-| Alert thresholds | Settings page in dashboard OR database `sensor_settings` table |
+| Warning SMS message | `server.cjs` → `SMS_CONFIG.messages.warning` |
+| Critical SMS message | `server.cjs` → `SMS_CONFIG.messages.critical` |
+| Device disconnect SMS | `server.cjs` → `sendDeviceDisconnectAlert()` route |
+| Hourly update message | `server.cjs` → `SMS_CONFIG.messages.hourlyUpdate` |
+| Sensor display names | `server.cjs` → `SMS_CONFIG.sensorNames` |
+| Recipient phone numbers | Database: `authorized_recipients` table OR Settings page |
+| Alert thresholds | Settings page OR database `sensor_settings` table |
+| SMS mute/sleep | Settings page → "SMS Alert Sleep / Mute" section |
 | Hourly update interval | `.env` file → `HOURLY_SMS_INTERVAL_MS` |
 | Enable/disable hourly updates | `.env` file → `HOURLY_SMS_ENABLED` |
 | SMS cooldown periods | `.env` file → `SMS_COOLDOWN_MS`, `WARNING_SMS_COOLDOWN_MS` |
 
 ---
 
-## 1. How to Change SMS Message Content
+## 1. SMS Alert Types
+
+### Threshold Alert SMS
+
+Sent when sensor values exceed configured thresholds:
+
+- **Warning**: Value slightly outside safe range
+- **Critical**: Value 15%+ outside safe range
+
+Messages are customized via `SMS_CONFIG.messages` in `server.cjs` (see sections below).
+
+### Device Disconnect SMS
+
+Sent when the ESP32 device stops sending data for 15+ seconds:
+
+```
+CRAYVINGS DEVICE ALERT
+ESP32 device disconnected
+ESP32 device disconnected — no data for 15+ seconds
+Failed polls: 5
+Time: 05/04 10:30 AM
+```
+
+**Triggered by:** `DeviceConnectionMonitor` component detects `online → offline` transition
+
+**Endpoint:** `POST /alert/device-disconnect` (called internally by backend)
+
+**Muted by:** SMS mute/sleep feature (see section 9)
+
+### Hourly Status Update SMS
+
+Sent at regular intervals with current sensor readings and status summary.
+
+---
+
+## 2. How to Change SMS Message Content
 
 ### Warning Alert Message
 
-Edit `SMS_CONFIG.messages.warning` in `server.cjs` (around line 45):
+Edit `SMS_CONFIG.messages.warning` in `server.cjs`:
 
 ```javascript
 warning: "⚠️ {{SENSOR}} WARNING\n" +
@@ -43,7 +80,7 @@ warning: "⚠️ {{SENSOR}} WARNING\n" +
 
 ### Critical Alert Message
 
-Edit `SMS_CONFIG.messages.critical` in `server.cjs` (around line 52):
+Edit `SMS_CONFIG.messages.critical` in `server.cjs`:
 
 ```javascript
 critical: "🚨 {{SENSOR}} CRITICAL ALERT\n" +
@@ -54,9 +91,21 @@ critical: "🚨 {{SENSOR}} CRITICAL ALERT\n" +
           "Status: CRITICAL - Immediate action required!",
 ```
 
+### Device Disconnect Message
+
+Edit the message template in the `/alert/device-disconnect` route handler in `server.cjs`:
+
+```javascript
+const message = `CRAYVINGS DEVICE ALERT
+ESP32 device disconnected
+ESP32 device disconnected — no data for 15+ seconds
+Failed polls: ${failedPollCount}
+Time: ${formattedTime}`;
+```
+
 ### Hourly Update Message
 
-Edit `SMS_CONFIG.messages.hourlyUpdate` in `server.cjs` (around line 60):
+Edit `SMS_CONFIG.messages.hourlyUpdate` in `server.cjs`:
 
 ```javascript
 hourlyUpdate: "📊 CRAYVINGS HOURLY UPDATE\n" +
@@ -68,17 +117,14 @@ hourlyUpdate: "📊 CRAYVINGS HOURLY UPDATE\n" +
 ```
 
 **Additional placeholders for hourly update:**
-- `{{TEMP}}` - Temperature reading
-- `{{TEMP_STATUS}}` - Temperature status with emoji (✅ Good, ⚠️ Warning, 🚨 Critical)
-- `{{PH}}` - pH reading
-- `{{PH_STATUS}}` - pH status
-- `{{WATER}}` - Water level reading
-- `{{WATER_STATUS}}` - Water level status
+- `{{TEMP}}`, `{{TEMP_STATUS}}` - Temperature reading and status
+- `{{PH}}`, `{{PH_STATUS}}` - pH reading and status
+- `{{WATER}}`, `{{WATER_STATUS}}` - Water level reading and status
 - `{{SUMMARY}}` - Summary text (e.g., "All systems normal ✅")
 
 ---
 
-## 2. How to Change Recipient Phone Numbers
+## 3. How to Change Recipient Phone Numbers
 
 ### Option A: Using the Dashboard (Recommended)
 
@@ -87,6 +133,7 @@ hourlyUpdate: "📊 CRAYVINGS HOURLY UPDATE\n" +
 3. Click **Add Recipient** to add new numbers
 4. Use the **Edit** button to change existing numbers
 5. Use **Delete** to remove numbers
+6. Use the **active toggle** to enable/disable without deleting
 
 ### Option B: Using Database (Advanced)
 
@@ -106,15 +153,18 @@ WHERE id = 1;
 UPDATE authorized_recipients
 SET is_active = false
 WHERE id = 1;
+
+-- View all recipients
+SELECT * FROM authorized_recipients ORDER BY created_at DESC;
 ```
 
 **Phone number format:** Must be `+639XXXXXXXX` (Philippines format)
 
 ---
 
-## 3. How to Change Alert Names/Titles
+## 4. How to Change Alert Names/Titles
 
-Edit `SMS_CONFIG.sensorNames` in `server.cjs` (around line 72):
+Edit `SMS_CONFIG.sensorNames` in `server.cjs`:
 
 ```javascript
 sensorNames: {
@@ -128,11 +178,9 @@ Change the values (right side) to customize what appears in SMS messages.
 
 ---
 
-## 4. How to Adjust the Hourly Interval
+## 5. How to Adjust the Hourly Interval
 
 ### Option A: Using `.env` file (Recommended)
-
-Add or edit in your `.env` file:
 
 ```bash
 # Send hourly update every 2 hours (in milliseconds)
@@ -147,12 +195,11 @@ HOURLY_SMS_INTERVAL_MS=3600000
 
 ### Option B: Change the default in `server.cjs`
 
-Edit `SMS_CONFIG.hourly.intervalMs` (around line 82):
+Edit `SMS_CONFIG.hourly.intervalMs`:
 
 ```javascript
 hourly: {
   enabled: process.env.HOURLY_SMS_ENABLED !== 'false',
-  // Change this default value (in milliseconds)
   intervalMs: process.env.HOURLY_SMS_INTERVAL_MS
     ? parseInt(process.env.HOURLY_SMS_INTERVAL_MS)
     : 60 * 60 * 1000  // Default: 1 hour
@@ -167,11 +214,9 @@ hourly: {
 
 ---
 
-## 5. How to Turn Hourly Updates On/Off
+## 6. How to Turn Hourly Updates On/Off
 
-### Using `.env` file (Recommended)
-
-Add or edit in your `.env` file:
+### Using `.env` file
 
 ```bash
 # Disable hourly updates
@@ -181,15 +226,13 @@ HOURLY_SMS_ENABLED=false
 HOURLY_SMS_ENABLED=true
 ```
 
-### Using Dashboard (if feature added)
-
-Currently, you must use the `.env` file. Restart the server after changing.
+Restart the server after changing.
 
 ---
 
-## 6. How to Customize SMS Sender Name
+## 7. How to Customize SMS Sender Name
 
-Edit `SMS_CONFIG.from` in `server.cjs` (around line 92):
+Edit `SMS_CONFIG.from` in `server.cjs`:
 
 ```javascript
 from: "CRAYVINGS"  // Change this to your preferred sender name (max 11 characters)
@@ -197,7 +240,7 @@ from: "CRAYVINGS"  // Change this to your preferred sender name (max 11 characte
 
 ---
 
-## 7. How to Change SMS Cooldown Periods
+## 8. How to Change SMS Cooldown Periods
 
 Add or edit in your `.env` file:
 
@@ -210,6 +253,162 @@ WARNING_SMS_COOLDOWN_MS=3600000
 ```
 
 This prevents spam if a sensor stays in warning/critical state.
+
+---
+
+## 9. SMS Mute / Sleep Feature
+
+### Overview
+
+Pause SMS alert delivery for a specified duration while keeping all other alert features active (floating popups, activity logs, sounds still work normally).
+
+### How to Mute SMS
+
+#### From Floating Alert Popup
+
+1. When a disconnect alert appears (red popup, top-right)
+2. Click the **bell icon** 🔔 on the popup
+3. Select a duration: **1h**, **2h**, **4h**, **6h**, **8h**, **12h**, or **24h**
+4. Popup dismisses, SMS muted until expiration
+
+#### From Settings Page
+
+1. Go to **Settings** → **SMS Alert Sleep / Mute**
+2. Click a duration button: **1h**, **2h**, **4h**, **6h**, **8h**, **12h**, **24h**
+3. Current mute expiration shows if active
+4. Click **Unmute Alerts** to re-enable immediately
+
+### How Mute Works
+
+**Backend:**
+- In-memory timer: `smsMuteUntil = Date.now() + (hours * 60 * 60 * 1000)`
+- Before sending SMS, checks: `Date.now() < smsMuteUntil`
+- If muted: SMS skipped, but still logged to `sms_logs` with status `muted`
+- Server restart clears mute state
+
+**API Endpoints:**
+```bash
+# Mute SMS
+POST /alert/mute
+Body: { "hours": 4 }
+
+# Check mute status
+GET /alert/mute-status
+Response: { "isMuted": true, "muteUntil": "2025-05-04T18:30:00Z" }
+```
+
+### While Muted
+
+- ✅ Floating popups still appear
+- ✅ Activity logs still recorded
+- ✅ Alert sounds still play
+- ❌ SMS messages are NOT sent (logged as "muted")
+
+### Mute Durations Reference
+
+| Duration | Milliseconds | Use Case |
+|----------|-------------|----------|
+| 1 hour | 3600000 | Quick maintenance |
+| 2 hours | 7200000 | Short system work |
+| 4 hours | 14400000 | Half-day work |
+| 6 hours | 21600000 | Extended maintenance |
+| 8 hours | 28800000 | Work shift |
+| 12 hours | 43200000 | Overnight |
+| 24 hours | 86400000 | Full day |
+
+---
+
+## 10. Testing SMS Configuration
+
+### Send Test SMS
+
+1. Go to **Settings** → **SMS Recipients**
+2. Click the **Test** button next to any recipient
+3. A test message is sent immediately
+4. Check the recipient's phone for delivery
+
+### API Endpoint
+
+```bash
+POST /settings/recipients/test/:id
+```
+
+### Test Message Content
+
+```
+CRAYVINGS TEST MESSAGE
+This is a test SMS from the CRAYvings Monitoring System.
+If you received this, SMS configuration is working correctly.
+Time: 05/04 10:30 AM
+```
+
+---
+
+## 11. SMS Alert Flow
+
+```
+Sensor Threshold Breach OR Device Disconnect
+           │
+           ▼
+    Check Mute Status
+           │
+    ┌──────┴──────┐
+    │             │
+  Muted        Not Muted
+    │             │
+    ▼             ▼
+  Log only    Check Cooldown
+    │             │
+    │       ┌─────┴─────┐
+    │       │           │
+    │   In Cooldown   Ready
+    │       │           │
+    │       ▼           ▼
+    │    Log only   Query Active Recipients
+    │       │           │
+    │       │           ▼
+    │       │     Send SMS (SkySMS API)
+    │       │           │
+    │       │           ▼
+    │       │     Log to sms_logs
+    └───────┴───────────┘
+```
+
+---
+
+## 12. SMS Log Table
+
+All SMS attempts (sent, failed, muted) are logged to `sms_logs`:
+
+```sql
+CREATE TABLE sms_logs (
+  id SERIAL PRIMARY KEY,
+  recipient_phone VARCHAR(20) NOT NULL,
+  message TEXT NOT NULL,
+  status VARCHAR(20) NOT NULL,  -- 'sent', 'failed', 'muted'
+  error_message TEXT,
+  sms_id VARCHAR(100),           -- SkySMS message ID
+  sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+### View Recent SMS Logs
+
+```sql
+-- Last 20 SMS attempts
+SELECT * FROM sms_logs ORDER BY sent_at DESC LIMIT 20;
+
+-- Failed messages only
+SELECT * FROM sms_logs WHERE status = 'failed' ORDER BY sent_at DESC;
+
+-- Muted messages
+SELECT * FROM sms_logs WHERE status = 'muted' ORDER BY sent_at DESC;
+
+-- SMS count by status today
+SELECT status, COUNT(*) FROM sms_logs
+WHERE sent_at >= CURRENT_DATE
+GROUP BY status;
+```
 
 ---
 
@@ -232,9 +431,23 @@ This prevents spam if a sensor stays in warning/critical state.
    SELECT * FROM sms_logs ORDER BY sent_at DESC LIMIT 10;
    ```
 
+4. Check if SMS is muted:
+   ```bash
+   curl http://localhost:3000/alert/mute-status
+   ```
+
+5. Send a test SMS from Settings page to verify configuration
+
 ### Want different messages for each sensor?
 
-Currently, one template is used for all sensors of the same severity. To customize per sensor, modify the SMS sending code in the `for (const sensor of sensorChecks)` loop (around line 420 in `server.cjs`).
+Currently, one template is used for all sensors of the same severity. To customize per sensor, modify the SMS sending code in the `for (const sensor of sensorChecks)` loop in `server.cjs`.
+
+### Device disconnect SMS not sending?
+
+1. Verify `POST /alert/device-disconnect` endpoint exists in `server.cjs`
+2. Check that `DeviceConnectionMonitor` is mounted inside `FloatingAlertProvider` in `App.tsx`
+3. Verify active recipients exist in `authorized_recipients` table
+4. Check SMS mute status (may be silenced)
 
 ---
 

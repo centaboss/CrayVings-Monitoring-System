@@ -204,6 +204,7 @@ async function logSMS(phone, message, status, error, smsId = null) {
 }
 
 let lastAlertedState = {};
+let smsMuteUntil = null;
 
 // =============================================================================
 // ROUTES
@@ -570,6 +571,72 @@ app.get("/system-logs", async (req, res) => {
     res.json({ data: result.rows, total: parseInt(countResult.rows[0].count), page, limit });
   } catch (err) {
     res.status(500).json({ message: "Error fetching logs", error: err.message });
+  }
+});
+
+// POST /alert/device-disconnect
+app.post('/alert/device-disconnect', async (req, res) => {
+  try {
+    const { event_type, description, consecutive_failures } = req.body;
+    const recipients = await pool.query('SELECT phone_number, name FROM authorized_recipients WHERE is_active = true');
+    if (recipients.rows.length === 0) return res.status(200).json({ message: 'No active recipients', sent: 0 });
+
+    if (smsMuteUntil && new Date() < new Date(smsMuteUntil)) {
+      console.log('[' + new Date().toISOString() + '] SMS alerts muted until ' + smsMuteUntil + ', skipping disconnect alert');
+      await pool.query('INSERT INTO system_logs (action, parameter, old_value, new_value) VALUES ($1, $2, $3, $4)', ['Device Disconnect Muted', 'ESP32', String(consecutive_failures || 0), 'Muted until ' + smsMuteUntil]);
+      return res.json({ message: 'SMS alerts muted', sent: 0, total: recipients.rows.length, muted: true, muteExpires: smsMuteUntil });
+    }
+
+    const timestamp = new Date().toLocaleString('en-PH', { timeZone: 'Asia/Manila', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: true });
+    const message = 'CRAYVINGS DEVICE ALERT\nESP32 device disconnected\n' + (description || 'No data received for 15+ seconds') + '\nFailed polls: ' + (consecutive_failures || 0) + '\nTime: ' + timestamp;
+
+    let sent = 0;
+    for (const r of recipients.rows) {
+      const success = await sendSingleSMS(r.phone_number, message);
+      if (success) sent++;
+    }
+
+    await pool.query('INSERT INTO system_logs (action, parameter, old_value, new_value) VALUES ($1, $2, $3, $4)', ['Device Disconnect', 'ESP32', String(consecutive_failures || 0), description || '']);
+    res.json({ message: 'Disconnect alerts sent', sent, total: recipients.rows.length });
+  } catch (err) {
+    console.error('[' + new Date().toISOString() + '] Error sending disconnect alert:', err.message);
+    res.status(500).json({ message: 'Error sending disconnect alert', error: err.message });
+  }
+});
+
+// POST /alert/mute
+app.post('/alert/mute', async (req, res) => {
+  try {
+    const { hours } = req.body;
+    if (!hours || typeof hours !== 'number' || hours <= 0) {
+      smsMuteUntil = null;
+      console.log('[' + new Date().toISOString() + '] SMS alerts unmuted');
+      return res.json({ message: 'SMS alerts unmuted', muted: false, muteExpires: null });
+    }
+
+    smsMuteUntil = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+    console.log('[' + new Date().toISOString() + '] SMS alerts muted for ' + hours + ' hours until ' + smsMuteUntil);
+
+    await pool.query('INSERT INTO system_logs (action, parameter, old_value, new_value) VALUES ($1, $2, $3, $4)', ['SMS Muted', 'Alerts', String(hours) + 'h', 'Until ' + smsMuteUntil]);
+    res.json({ message: 'SMS alerts muted for ' + hours + ' hours', muted: true, muteExpires: smsMuteUntil });
+  } catch (err) {
+    console.error('[' + new Date().toISOString() + '] Error setting mute:', err.message);
+    res.status(500).json({ message: 'Error setting mute', error: err.message });
+  }
+});
+
+// GET /alert/mute-status
+app.get('/alert/mute-status', async (req, res) => {
+  try {
+    if (smsMuteUntil && new Date() < new Date(smsMuteUntil)) {
+      return res.json({ muted: true, muteExpires: smsMuteUntil });
+    }
+    if (smsMuteUntil && new Date() >= new Date(smsMuteUntil)) {
+      smsMuteUntil = null;
+    }
+    res.json({ muted: false, muteExpires: null });
+  } catch (err) {
+    res.status(500).json({ message: 'Error checking mute status', error: err.message });
   }
 });
 

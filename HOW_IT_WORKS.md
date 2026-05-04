@@ -26,28 +26,28 @@ The CRAYvings Monitoring System is an IoT-based aquaculture monitoring solution 
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                        CRAYvings Monitoring System                     │
+│                        CRAYvings Monitoring System                       │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                          │
-│  ┌──────────┐     ┌──────────────┐     ┌─────────────┐     ┌────────┐  │
-│  │  ESP32   │────▶│  Express API  │────▶│ PostgreSQL  │────▶│ React  │  │
-│  │ Hardware │     │  Backend      │     │ Database    │     │ Dashboard│  │
-│  └──────────┘     └──────────────┘     └─────────────┘     └────────┘  │
-│       │                   │                   │                  │         │
-│       │     ┌──────────────┘                   └──────────────┐   │         │
-│       │     │  Alert Generation │     Data Polling (3s)    │   │         │
-│       │     └────────────────────┘───────────────────────────┘   │         │
-│       │                                                           │         │
-│  Sensors:                                                         Pages:   │
-│  - DS18B20 (Temperature)                                     - Home       │
-│  - Ultrasonic (Water Level)                                  - Dashboard  │
-│  - pH Probe                                                  - Sensors    │
-│                                                               - Alerts    │
+│  ┌──────────┐     ┌──────────────┐     ┌─────────────┐     ┌────────┐   │
+│  │  ESP32   │────▶│  Express API  │────▶│ PostgreSQL  │────▶│ React  │   │
+│  │ Hardware │     │  Backend      │     │ Database    │     │ Dashboard│   │
+│  └──────────┘     └──────────────┘     └─────────────┘     └────────┘   │
+│       │                   │                   │                  │        │
+│       │     ┌──────────────┘                   └──────────────┐   │        │
+│       │     │  Alert Generation │     Data Polling (3s)    │   │        │
+│       │     └────────────────────┘───────────────────────────┘   │        │
+│       │                                                           │        │
+│  Sensors:                                                         Pages:  │
+│  - DS18B20 (Temperature)                                     - Home      │
+│  - Ultrasonic (Water Level)                                  - Dashboard │
+│  - pH Probe                                                  - Sensors   │
+│                                                               - Alerts   │
 │                                                               - Historical│
 │                                                               - Settings  │
 │                                                               - Logs      │
 │                                                               - Activity  │
-└───────────────────────────────────────────────────────────────────────────────┘
+└───────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -69,12 +69,12 @@ The system continuously monitors three critical water parameters collected by th
 - Sensor validation before sending data (invalid readings skipped)
 - Real-time display updates every 3 seconds via polling
 - Visual indicators for sensor status (online/offline)
-- Connection status detection (online/offline/unknown)
+- Connection status detection based on actual sensor data timestamp (not poll time)
 - Only 3 sensors actively monitored (matches ESP32 hardware)
 
 ### 2. Intelligent Alert System
 
-The system now includes **smart alert cooldown** to prevent alert spam:
+The system includes **smart alert cooldown** to prevent alert spam:
 
 - **Threshold detection** with severity classification
 - **Critical status** when values exceed 15% outside threshold range
@@ -85,26 +85,28 @@ The system now includes **smart alert cooldown** to prevent alert spam:
 
 **Alert Severity Logic:**
 ```
-value within 15% of threshold range: GOOD
-value 15%+ outside threshold:      CRITICAL (red)
-value slightly outside threshold:  WARNING (orange)
+value within threshold range:        GOOD (green)
+value slightly outside threshold:    WARNING (orange)
+value 15%+ outside threshold:        CRITICAL (red)
 ```
 
-### 3. Data-Driven Insights & Analytics
+### 3. Device Connection Monitoring
+
+The system actively monitors ESP32 connectivity:
+
+- **Stale data detection**: Connection status uses sensor data timestamp, not API response time
+- **15-second offline threshold**: If data is older than 15s, device is marked offline
+- **Error state display**: When disconnected, all pages show error UI (same as server down)
+- **Auto-recovery**: When fresh data arrives, all pages automatically recover
+- **Activity logging**: `device_disconnect` and `device_connect` events logged
+
+### 4. Data-Driven Insights & Analytics
 
 - **Historical data analysis** with time range filtering (1h, 6h, 24h, all)
 - **Trend charts** for Temperature, pH, and Water Level using Recharts
 - **Statistical summaries** on dashboard
 - **Export capability** via PDF (LogsPage exports system logs)
 - **Flexible history fetching** - Backend supports up to 1000 records (default: 300)
-
-### 4. Historical Data Analysis
-
-- Store all sensor readings in PostgreSQL
-- Query historical data with configurable limit (up to 1000 records)
-- Time-based filtering (1 hour, 6 hours, 24 hours, all time)
-- Data visualization with line charts
-- Fixed filtering logic ensures proper hourly data display
 
 ### 5. Mobile-Responsive Dashboard
 
@@ -119,14 +121,17 @@ value slightly outside threshold:  WARNING (orange)
 - Persistent storage in database
 - Real-time validation with range checking
 - Activity logging for all changes
-- **Smart save logic** - Only writes to DB when values actually change (prevents unnecessary updates)
+- **Smart save logic** - Only writes to DB when values actually change
 - **SMS recipient management** - Add, edit, delete recipients
+- **SMS mute/sleep** - Pause SMS alerts for 1/2/4/6/8/12/24 hours
 - **Test SMS** - Verify SMS configuration
+- **User management** - Create, delete, reset passwords
 
 ### 7. Activity Logging
 
 - Track all user interactions
 - Log navigation, button clicks, form submissions
+- Log device connect/disconnect events
 - Filterable and searchable activity history
 - Pagination support
 
@@ -135,13 +140,16 @@ value slightly outside threshold:  WARNING (orange)
 - Synthetic audio tones (Web Audio API)
 - Custom sound upload capability
 - Sound enable/disable toggle
+- Critical disconnect alerts play double-beep sound
 
 ### 9. SMS Alert System
 
 - **SkySMS API integration** for sending SMS notifications
+- **Threshold alerts** - Sent when sensor values exceed critical thresholds
+- **Disconnect alerts** - Sent when ESP32 device goes offline
+- **Mute/sleep feature** - Pause SMS for 1/2/4/6/8/12/24 hours
 - **Recipient management** - Add, edit, delete authorized recipients
-- **Individual SMS sending** - Send alerts to each recipient (bulk endpoint removed)
-- **SMS cooldown** - Configurable cooldown period (default: 5000ms)
+- **SMS cooldown** - Configurable cooldown period
 - **SMS logging** - Track all sent messages with status
 - **Test SMS** - Send test messages to verify configuration
 - **Active/inactive toggle** - Enable/disable recipients without deletion
@@ -206,7 +214,6 @@ The Express server (`server.cjs`) performs these operations:
 4. **Alert Generation**: Creates alerts for out-of-range values
 5. **Logging**: Records all alerts to `system_logs` table
 6. **History API**: Accepts `limit` parameter (1-1000, default: 300) for flexible data retrieval
-6. **History API**: Accepts `limit` parameter (1-1000, default: 300) for flexible data retrieval
 
 ### 4. Frontend Display
 
@@ -214,33 +221,57 @@ The React dashboard:
 
 1. **Polling**: Fetches data every 3 seconds
 2. **Display**: Shows real-time readings in cards and charts
-3. **Status**: Indicates connection status (online/offline)
+3. **Connection check**: Uses sensor data timestamp to determine online/offline
 4. **Alerts**: Warns users when parameters exceed thresholds
-5. **Audio**: Plays alert sounds for threshold violations
-6. **SMS**: Sends SMS notifications for critical alerts via SkySMS
+5. **Disconnect alerts**: Floating popup + sound + activity log when ESP32 offline
+6. **SMS**: Sends SMS for critical alerts and device disconnects (unless muted)
+7. **Audio**: Plays alert sounds for threshold violations and disconnects
 
 ---
 
 ## Connection & Offline Handling
 
-### Live Connection
+### How Connection Status Works
 
-- Frontend polls `/sensor/latest` every 3 seconds
-- Connection status shown as **ONLINE** (green) or **OFFLINE** (red)
-- Last update timestamp displayed
+The frontend polls `GET /sensor/latest` every 3 seconds. Unlike before, the connection status is determined by the **actual timestamp of the sensor data** stored in the database, not the time the API responded.
 
-### Disconnect Detection
+```
+lastUpdate = new Date(latest.timestamp)  // Sensor's actual send time
+gap = Date.now() - lastUpdate.getTime()
+if gap > 15000 → OFFLINE
+```
 
-- If 5 consecutive polls fail, status changes to **OFFLINE**
-- Error message displayed: "Unable to connect to device"
-- Auto-retries continue even in offline state
-- Tracks consecutive failures count
+This means:
+- If the ESP32 stops sending data, the dashboard correctly shows "offline" after 15 seconds
+- If the backend is running but ESP32 is disconnected, stale data is detected and error state is shown
+- When fresh data arrives, the system automatically recovers
 
-### Reconnection
+### When ESP32 Disconnects
 
-- When data resumes, status automatically returns to **ONLINE**
-- All components re-render with fresh data
-- Historical data preserved in database
+1. Sensor data in database becomes stale (older than 15 seconds)
+2. `error` state set to "ESP32 device is offline. Last data received is stale."
+3. All pages show their error UI (red error state, same as when server is down)
+4. **FloatingAlert**: "ESP32 device disconnected — no data received" (red popup, top-right)
+5. **Sound**: Critical alert sound (double beep) plays
+6. **Activity log**: `device_disconnect` event recorded
+7. **SMS**: Sent to all active recipients (unless muted)
+
+### When ESP32 Reconnects
+
+1. Fresh data arrives with current timestamp
+2. `error` state cleared, `connectionStatus` = "online"
+3. All pages automatically re-render with live readings
+4. **FloatingAlert**: "ESP32 device reconnected — data restored" (amber popup)
+5. **Activity log**: `device_connect` event recorded
+6. Disconnect popup automatically removed
+
+### Offline Threshold Configuration
+
+```typescript
+const POLL_INTERVAL = 3000;          // Poll every 3 seconds
+const OFFLINE_THRESHOLD = 15000;     // 15 seconds before offline
+const MAX_CONSECUTIVE_FAILURES = 5;  // API failures before offline
+```
 
 ---
 
@@ -262,9 +293,7 @@ Users can configure thresholds in **Settings**:
 |------------|--------------|-------------|------|
 | Temperature | 20 | 31 | °C |
 | pH Level | 6.5 | 8.5 | - |
-| Dissolved Oxygen | 5 | 10 | mg/L |
 | Water Level | 10 | 100 | % |
-| Ammonia | 0 | 0.5 | ppm |
 
 ### Alert Severity
 
@@ -277,28 +306,99 @@ Users can configure thresholds in **Settings**:
 
 ---
 
+## SMS Alert System
+
+### SkySMS Integration
+
+The system integrates with **SkySMS API** to send SMS notifications for:
+- Critical threshold breaches
+- ESP32 device disconnect events
+
+**Configuration (.env):**
+```bash
+SKYSMS_API_KEY=your_skysms_api_key_here
+SKYSMS_API_URL=https://skysms.skyio.site/api/v1
+SMS_COOLDOWN_MS=300000
+```
+
+### SMS Alert Flow
+
+1. **Threshold breach** or **device disconnect** detected
+2. **Recipient lookup** - Queries `authorized_recipients` for active recipients
+3. **Mute check** - If SMS is muted, skip sending (but still log)
+4. **Cooldown check** - Prevents SMS spam
+5. **SMS sent** - Individual messages to each recipient
+6. **Logging** - All SMS attempts logged to `sms_logs` table
+
+### SMS Mute / Sleep
+
+SMS alerts can be temporarily paused:
+
+**From floating alert popup:**
+- Click the bell icon on a disconnect alert
+- Choose duration: 1h, 2h, 4h, 6h, 8h, 12h, or 24h
+- Popup dismisses, alerts muted until expiration
+
+**From Settings page:**
+- "SMS Alert Sleep / Mute" section
+- Duration buttons: 1h, 2h, 4h, 6h, 8h, 12h, 24h
+- Shows current mute expiration if active
+- "Unmute Alerts" button when muted
+
+While muted:
+- Floating popups still appear
+- Activity logs still recorded
+- SMS messages are NOT sent
+
+### Device Disconnect SMS Message
+
+```
+CRAYVINGS DEVICE ALERT
+ESP32 device disconnected
+ESP32 device disconnected — no data for 15+ seconds
+Failed polls: 5
+Time: 05/04 10:30 AM
+```
+
+### Recipient Management
+
+Manage SMS recipients through the **Settings** page:
+
+| Action | Endpoint | Description |
+|--------|----------|-------------|
+| List | `GET /settings/recipients` | Get all recipients |
+| Add | `POST /settings/recipients` | Add new phone number |
+| Update | `PUT /settings/recipients/:id` | Toggle active status, edit name |
+| Delete | `DELETE /settings/recipients/:id` | Remove recipient |
+| Test | `POST /settings/recipients/test/:id` | Send test SMS |
+
+---
+
 ## API Endpoints
 
 ### Complete API Reference
 
-| Endpoint | Method | Description | Query Params | Request Body | Response |
-|----------|--------|-------------|--------------|--------------|----------|
-| `/` | GET | Server info | - | - | `{message, routes: []}` |
-| `/health` | GET | Health check | - | - | `{status, database, documents, serverTime}` |
-| `/sensor` | POST | Submit sensor data | - | Sensor payload | `{message, data}` |
-| `/sensor` | GET | Get history | `limit` (1-1000, default: 300) | - | `SensorEntry[]` |
-| `/sensor/latest` | GET | Get latest | - | - | `SensorEntry` |
-| `/settings` | GET | Get thresholds | - | - | `SensorSettings` |
-| `/settings` | POST | Update thresholds | - | Partial Settings | `{message, data}` |
-| `/settings/recipients` | GET | Get all recipients | - | - | `{data: Recipient[]}` |
-| `/settings/recipients` | POST | Add new recipient | - | `{phone_number, name}` | `{success, data}` |
-| `/settings/recipients/:id` | PUT | Update recipient | - | `{name, is_active}` | `{success, data}` |
-| `/settings/recipients/:id` | DELETE | Delete recipient | - | - | `{success, message}` |
-| `/settings/recipients/test/:id` | POST | Send test SMS | - | - | `{success, message}` |
-| `/system-logs` | GET | Get logs | `page`, `limit` | - | `{data, total}` |
-| `/logs` | POST | Create log | - | `{action, parameter, old_value, new_value}` | `{message, data}` |
-| `/activity-logs` | GET | Get activity | `page`, `limit`, `search`, `sortBy`, `actionType` | - | `{data, total, page, limit, totalPages}` |
-| `/activity-logs` | POST | Create activity | - | `{action_type, description, module}` | `{message, data}` |
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/` | GET | Server info |
+| `/health` | GET | Health check |
+| `/sensor` | POST | Submit sensor data |
+| `/sensor` | GET | Get history (`limit`: 1-1000) |
+| `/sensor/latest` | GET | Get latest reading |
+| `/settings` | GET | Get thresholds |
+| `/settings` | POST | Update thresholds |
+| `/settings/recipients` | GET | Get all recipients |
+| `/settings/recipients` | POST | Add new recipient |
+| `/settings/recipients/:id` | PUT | Update recipient |
+| `/settings/recipients/:id` | DELETE | Delete recipient |
+| `/settings/recipients/test/:id` | POST | Send test SMS |
+| `/alert/device-disconnect` | POST | Send disconnect SMS alert |
+| `/alert/mute` | POST | Mute SMS (`{ hours: number }`) |
+| `/alert/mute-status` | GET | Check mute status |
+| `/system-logs` | GET | Get system logs (`page`, `limit`) |
+| `/logs` | POST | Create log entry |
+| `/activity-logs` | GET | Get activity logs (`page`, `limit`, `search`, `sortBy`, `actionType`) |
+| `/activity-logs` | POST | Create activity log |
 
 ---
 
@@ -318,17 +418,11 @@ const sensorSchema = z.object({
 });
 ```
 
-**Validation features:**
-- Type coercion (strings to numbers)
-- Range constraints
-- Datetime parsing
-
 ### Smart Save Logic (Change Detection)
 
-The backend uses explicit comparison to prevent unnecessary database writes:
+Prevents unnecessary database writes:
 
 ```javascript
-// Normalize values for safe comparison (handles null, dates, numbers, objects)
 function normalizeComparableValue(value) {
   if (value === undefined || value === null) return null;
   if (value instanceof Date) return value.toISOString();
@@ -337,61 +431,13 @@ function normalizeComparableValue(value) {
   if (isPlainObject(value) || Array.isArray(value)) return stableStringify(value);
   return value;
 }
-
-// Compare normalized values using Object.is for proper equality
-function areValuesEqual(currentValue, newValue) {
-  const current = normalizeComparableValue(currentValue);
-  const next = normalizeComparableValue(newValue);
-  if (current === null || next === null) return current === next;
-  return Object.is(current, next);
-}
-
-// Returns only fields that actually changed vs current DB row
-function getChangedFields(currentRow, updates) {
-  const changed = {};
-  for (const [field, newValue] of Object.entries(updates)) {
-    const currentValue = currentRow ? currentRow[field] : undefined;
-    if (!areValuesEqual(currentValue, newValue)) {
-      changed[field] = newValue;
-    }
-  }
-  return changed;
-}
-
-// Generic update helper - only writes changed fields to database
-async function updateOnlyIfChanged(db, options) {
-  const { table, keyColumn, keyValue, currentRow, updates, touchUpdatedAt } = options;
-  const changed = getChangedFields(currentRow, updates);
-  if (Object.keys(changed).length === 0) {
-    return { changed: false, row: currentRow };
-  }
-  // Build UPDATE query with only changed fields
-  // ...
-}
 ```
 
 **Used for:**
-- **Settings updates** - Only updates threshold fields that changed
-- **Sensor data** - Skips duplicate readings (compares device_id, temperature, water_level, ph)
-- **Recipients** - Only updates name or is_active when changed
-- **Password reset** - Checks if new password equals current hash before updating
-
-### Database Operations
-
-Connection pooling with `pg` library:
-
-```javascript
-const pool = new Pool({
-  host: process.env.PG_HOST || "localhost",
-  port: process.env.PG_PORT || 5432,
-  database: process.env.PG_DATABASE || "crayvings_monitoring_system_db",
-  user: process.env.PG_USER || "postgres",
-  password: process.env.PG_PASSWORD,
-  max: 20,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
-});
-```
+- Settings updates (only changed fields)
+- Sensor data (skips duplicates)
+- Recipients (only updates changed fields)
+- Password reset (checks if new equals current)
 
 ---
 
@@ -401,14 +447,16 @@ const pool = new Pool({
 
 ```
 App
-├── SensorProvider (main data context)
+├── SensorProvider
 │   ├── useSensorDataPolling (3s interval)
 │   ├── useSettingsManager
 │   ├── useLogsManager (5s interval)
 │   └── useActivityLogsManager
-├── FloatingAlertProvider (toast notifications)
-├── Header (top bar)
-├── Sidebar (navigation)
+├── FloatingAlertProvider
+├── DeviceConnectionMonitor  ← Monitors ESP32 connect/disconnect
+├── FloatingAlertContainer   ← Displays popup alerts
+├── Header
+├── Sidebar
 └── Pages
     ├── HomePage
     ├── DashboardPage
@@ -420,25 +468,28 @@ App
     └── ActivityLogsPage
 ```
 
-### State Management Approach
+### State Management
 
-The application uses React Context with custom hooks:
+React Context with custom hooks:
 
 1. **SensorDataContext**: Real-time sensor data, history, connection status
-2. **SensorSettingsContext**: Threshold configuration + recipient management
+2. **SensorSettingsContext**: Threshold configuration
 3. **LogsContext**: System logs with pagination
 4. **ActivityLogsContext**: User activity tracking
 5. **FloatingAlertContext**: Toast notifications
 
-### Real-Time Polling Mechanism
+### Connection Detection Mechanism
 
 ```typescript
-const POLL_INTERVAL = 3000; // 3 seconds
-const MAX_CONSECUTIVE_FAILURES = 5;
-const OFFLINE_THRESHOLD = 15000; // 15 seconds
+const sensorTime = new Date(latest.timestamp);  // Actual sensor send time
+const gap = Date.now() - sensorTime.getTime();
+const isStale = gap > OFFLINE_THRESHOLD;        // 15 seconds
 
-// Uses AbortController for request cancellation
-// Tracks consecutive failures for offline detection
+setState({
+  error: isStale ? "ESP32 device is offline..." : null,
+  connectionStatus: isStale ? "offline" : "online",
+  lastUpdate: sensorTime,
+});
 ```
 
 ### Alert Cooldown Logic
@@ -456,8 +507,6 @@ const ALERT_COOLDOWN_MS = 10000; // 10 seconds
 ## IoT/Hardware Integration
 
 ### ESP32 Communication Protocol
-
-The ESP32 communicates via HTTP POST requests:
 
 ```
 Protocol: HTTP/1.1
@@ -493,108 +542,47 @@ WiFi: WiFiMulti for multiple network support
 
 ---
 
-## SMS Alert System
-
-### SkySMS Integration
-
-The system integrates with **SkySMS API** to send SMS notifications when critical conditions are detected.
-
-**Configuration (.env):**
-```bash
-SKYSMS_API_KEY=your_skysms_api_key_here
-SKYSMS_API_URL=https://skysms.skyio.site/api/v1
-SMS_COOLDOWN_MS=5000
-```
-
-### SMS Alert Logic
-
-1. **Threshold breach detected** - Sensor value exceeds critical threshold (15%+ outside range)
-2. **Recipient lookup** - System queries `authorized_recipients` table for active recipients
-3. **Cooldown check** - Prevents SMS spam (default 5 seconds between alerts per parameter)
-4. **Bulk SMS sent** - Uses SkySMS bulk API to send to all active recipients
-5. **Logging** - All SMS attempts logged to `sms_logs` table
-
-### Recipient Management
-
-Manage SMS recipients through the **Settings** page:
-
-| Action | Endpoint | Description |
-|--------|----------|-------------|
-| List | `GET /settings/recipients` | Get all recipients |
-| Add | `POST /settings/recipients` | Add new phone number |
-| Update | `PUT /settings/recipients/:id` | Toggle active status, edit name |
-| Delete | `DELETE /settings/recipients/:id` | Remove recipient |
-| Test | `POST /settings/recipients/test/:id` | Send test SMS |
-
-### SMS Log Table
-
-```sql
-CREATE TABLE sms_logs (
-  id SERIAL PRIMARY KEY,
-  recipient_phone VARCHAR(20) NOT NULL,
-  message TEXT NOT NULL,
-  status VARCHAR(20) NOT NULL,
-  error_message TEXT,
-  sms_id VARCHAR(100),
-  sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
-
-### Authorized Recipients Table
-
-```sql
-CREATE TABLE authorized_recipients (
-  id SERIAL PRIMARY KEY,
-  phone_number VARCHAR(20) NOT NULL UNIQUE,
-  name VARCHAR(100),
-  is_active BOOLEAN DEFAULT true,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
-
----
-
 ## Project Structure
 
 ```
 src/
 ├── api/
-│   └── client.ts           # Axios API client with AbortController
+│   └── client.ts           # Axios API client with all functions
 ├── assets/
-│   └── craybitch without background.png  # Logo
+│   └── craybitch without background.png
 ├── components/
-│   ├── Header.tsx         # Top navigation bar
-│   ├── Sidebar.tsx        # Side menu navigation (icon-based)
-│   ├── StatCard.tsx       # Metric display card
-│   ├── TrendCard.tsx      # Line chart component
-│   └── FloatingAlert.tsx  # Toast notifications
+│   ├── Header.tsx
+│   ├── Sidebar.tsx
+│   ├── StatCard.tsx
+│   ├── TrendCard.tsx
+│   ├── FloatingAlert.tsx        # Popup alerts with mute options
+│   └── DeviceConnectionMonitor.tsx  # ESP32 connect/disconnect monitoring
 ├── contexts/
-│   ├── SensorContext.tsx # Context interfaces
-│   └── SensorProvider.tsx # Data fetching hooks (polling)
+│   ├── SensorContext.tsx        # Context interfaces
+│   └── SensorProvider.tsx       # Data polling + stale detection
 ├── hooks/
-│   ├── useSensors.ts     # Consolidated data access hook
-│   ├── useThresholdAlert.ts # Alert threshold monitoring
-│   └── useFloatingAlerts.ts # Alert context
+│   ├── useSensors.ts            # Consolidated data access
+│   ├── useThresholdAlert.ts     # Alert threshold monitoring
+│   └── useFloatingAlerts.ts     # Alert context
 ├── pages/
-│   ├── HomePage.tsx       # Landing page with status overview
-│   ├── DashboardPage.tsx # Main monitoring view
-│   ├── SensorsPage.tsx   # Individual sensor details
-│   ├── AlertsPage.tsx       # Alert history with Alert/Change filtering
-│   ├── HistoricalDataPage.tsx # Trend charts with time range filtering
-│   ├── SettingsPage.tsx      # Threshold + recipient management
-│   ├── LogsPage.tsx          # System log viewer with parameter filtering + PDF export
-│   └── ActivityLogsPage.tsx # User activity tracking
+│   ├── HomePage.tsx             # Error state when ESP32 offline
+│   ├── DashboardPage.tsx
+│   ├── SensorsPage.tsx
+│   ├── AlertsPage.tsx
+│   ├── HistoricalDataPage.tsx
+│   ├── SettingsPage.tsx         # Thresholds + recipients + SMS mute + users
+│   ├── LogsPage.tsx
+│   └── ActivityLogsPage.tsx
 ├── types/
-│   └── index.ts         # TypeScript types and helpers
+│   └── index.ts
 ├── utils/
-│   └── playAlertSound.ts # Web Audio API for alerts
-├── App.tsx             # Main app layout
-├── main.tsx           # Entry point
-└── index.css           # Tailwind styles
-server.cjs             # Express backend server (832 lines)
+│   └── playAlertSound.ts
+├── App.tsx
+├── main.tsx
+└── index.css
+server.cjs                       # Express backend
 esp32code/
-└── esp32code.ino      # ESP32 firmware code
+└── esp32code.ino                # ESP32 firmware
 ```
 
 ---
@@ -605,12 +593,6 @@ esp32code/
 
 ```bash
 node server.cjs
-```
-
-Expected output:
-```
-[2026-04-25T12:00:00.000Z] Server started on port 3000
-[2026-04-25T12:00:00.000Z] PostgreSQL connected and table ready
 ```
 
 ### 2. Frontend
@@ -638,37 +620,24 @@ Upload using Arduino IDE and monitor at 19200 baud.
 ### Backend (.env)
 
 ```bash
-# Server Configuration
 PORT=3000
-NODE_ENV=development
-
-# PostgreSQL Configuration
 PG_HOST=localhost
 PG_PORT=5432
 PG_DATABASE=crayvings_monitoring_system_db
 PG_USER=postgres
 PG_PASSWORD=your_password
-
-# CORS Configuration
-ALLOWED_ORIGINS=http://localhost:5173,http://localhost:5174,http://localhost:3001
-
-# Arduino Serial Configuration (optional)
-ARDUINO_ENABLED=false
-ARDUINO_PORT=COM3
-ARDUINO_BAUD=19200
-DEVICE_ID=ARDUINO_001
-POLL_INTERVAL=1000
-
-# SkySMS Configuration
+ALLOWED_ORIGINS=http://localhost:5173
 SKYSMS_API_KEY=your_skysms_api_key_here
 SKYSMS_API_URL=https://skysms.skyio.site/api/v1
-SMS_COOLDOWN_MS=5000
+SMS_COOLDOWN_MS=300000
+WARNING_SMS_COOLDOWN_MS=3600000
+HOURLY_SMS_ENABLED=true
+HOURLY_SMS_INTERVAL_MS=3600000
 ```
 
 ### Frontend
 
 ```bash
-# Optional - defaults to http://localhost:3000
 VITE_API_BASE=http://localhost:3000
 ```
 
@@ -685,8 +654,6 @@ CREATE TABLE sensors (
   temperature DECIMAL(5,2) DEFAULT 0,
   water_level DECIMAL(5,2) DEFAULT 0,
   ph DECIMAL(5,2) DEFAULT 0,
-  dissolved_oxygen DECIMAL(5,2) DEFAULT 0,
-  ammonia DECIMAL(5,2) DEFAULT 0,
   timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -703,7 +670,8 @@ CREATE TABLE system_logs (
   parameter VARCHAR(100) NOT NULL,
   old_value VARCHAR(50),
   new_value VARCHAR(50),
-  timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+  timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
 CREATE INDEX idx_system_logs_timestamp ON system_logs(timestamp DESC);
 ```
@@ -717,13 +685,10 @@ CREATE TABLE sensor_settings (
   temp_max DECIMAL(5,2) DEFAULT 31.0,
   ph_min DECIMAL(5,2) DEFAULT 6.5,
   ph_max DECIMAL(5,2) DEFAULT 8.5,
-  do_min DECIMAL(5,2) DEFAULT 5.0,
-  do_max DECIMAL(5,2) DEFAULT 10.0,
   water_level_min DECIMAL(5,2) DEFAULT 10.0,
   water_level_max DECIMAL(5,2) DEFAULT 100.0,
-  ammonia_min DECIMAL(5,2) DEFAULT 0.0,
-  ammonia_max DECIMAL(5,2) DEFAULT 0.5,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 ```
 
 ### Activity Logs Table
@@ -735,7 +700,8 @@ CREATE TABLE activity_logs (
   action_type VARCHAR(50) NOT NULL,
   description TEXT,
   module VARCHAR(100),
-  timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+  timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
 CREATE INDEX idx_activity_logs_timestamp ON activity_logs(timestamp DESC);
 CREATE INDEX idx_activity_logs_action_type ON activity_logs(action_type);
@@ -775,29 +741,27 @@ CREATE TABLE sms_logs (
 ### Quick Status Check
 
 ```powershell
-# Check if backend is running (port 3000)
-Get-NetTCPConnection -LocalPort 3000
-
-# Check if PostgreSQL is running
-Get-NetTCPConnection -LocalPort 5432
-
-# Check frontend ports (5173 or 5174)
-Get-NetTCPConnection -LocalPort 5173,5174
+Get-NetTCPConnection -LocalPort 3000   # Backend
+Get-NetTCPConnection -LocalPort 5432   # PostgreSQL
+Get-NetTCPConnection -LocalPort 5173   # Frontend
 ```
 
 ### Testing the Backend API
 
 ```bash
-# Health check
 curl http://localhost:3000/health
-
-# Get latest sensor
 curl http://localhost:3000/sensor/latest
-
-# Manually send test data
 curl -X POST http://localhost:3000/sensor \
   -H "Content-Type: application/json" \
   -d '{"device_id":"TEST","temperature":25.0,"water_level":75.0,"ph":7.0}'
+
+# Test mute
+curl -X POST http://localhost:3000/alert/mute \
+  -H "Content-Type: application/json" \
+  -d '{"hours": 4}'
+
+# Check mute status
+curl http://localhost:3000/alert/mute-status
 ```
 
 ### Common Issues & Solutions
@@ -805,33 +769,30 @@ curl -X POST http://localhost:3000/sensor \
 | Issue | Cause | Solution |
 |-------|-------|---------|
 | "Connection refused" | Server not running | Start `node server.cjs` |
-| "Invalid URL" | Empty API URL | Set `VITE_API_BASE` or check `types/index.ts` |
-| CORS error | Wrong port | Add port to `ALLOWED_ORIGINS` in server |
+| "Invalid URL" | Empty API URL | Set `VITE_API_BASE` |
+| CORS error | Wrong port | Add port to `ALLOWED_ORIGINS` |
 | Data not showing | Wrong IP | Check server config in frontend |
 | "Device offline" | ESP32 not connected | Check WiFi, restart ESP32 |
 | Alert spam | Frequent threshold breaches | Adjust threshold settings |
+| AudioContext warning | Browser security | Click anywhere on page to unlock audio |
+| SMS not sending | Missing API key | Set `SKYSMS_API_KEY` in .env |
 
 ---
 
 ## Performance Metrics
 
-### Current Performance
-
-- **Polling interval**: 3 seconds
-- **Logs polling interval**: 5 seconds
-- **Request timeout**: 10 seconds
-- **Connection pool**: 20 max connections
-- **Page size**: 20 items default
-- **Alert cooldown**: 10 seconds
-- **SMS cooldown**: 5 seconds (configurable via `SMS_COOLDOWN_MS`)
-- **Offline threshold**: 15 seconds
-
-### Scalability Considerations
-
-- Database indexing on timestamp columns
-- Connection pooling for multiple clients
-- Pagination for large datasets
-- AbortController for request cancellation
+| Metric | Value |
+|--------|-------|
+| Polling interval | 3 seconds |
+| Logs polling interval | 5 seconds |
+| Request timeout | 10 seconds |
+| Connection pool | 20 max connections |
+| Page size | 20 items default |
+| Alert cooldown | 10 seconds |
+| SMS cooldown (critical) | 5 minutes |
+| SMS cooldown (warning) | 1 hour |
+| Offline threshold | 15 seconds |
+| Mute durations | 1, 2, 4, 6, 8, 12, 24 hours |
 
 ---
 
@@ -842,11 +803,11 @@ curl -X POST http://localhost:3000/sensor \
 - CORS origin validation
 - Input validation with Zod
 - SQL parameterized queries (pg)
-- No sensitive data stored
+- Auth tokens with 24-hour expiration
 
 ### Production Recommendations
 
-1. Add authentication
+1. Add authentication to all endpoints
 2. Use HTTPS
 3. Implement rate limiting
 4. Add API keys/session tokens
@@ -863,4 +824,5 @@ curl -X POST http://localhost:3000/sensor \
 5. **WebSocket** - Real-time updates instead of polling
 6. **Multi-user** - Role-based access
 7. **Export API** - Public API for integrations
-8. **Arduino Serial** - Direct serial connection support
+8. **Email Alerts** - SMTP-based notifications
+9. **Dashboard Widgets** - Customizable home page

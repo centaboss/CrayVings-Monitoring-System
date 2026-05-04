@@ -26,7 +26,7 @@ import {
 import type { SensorSettings } from "../types";
 import { DEFAULT_SETTINGS, getSettingsThresholds } from "../types";
 import { z } from "zod";
-import { fetchUsers, createUser, deleteUser, resetUserPassword, resetSettings as apiResetSettings, fetchRecipients, addRecipient, deleteRecipient, sendTestSms, updateRecipient } from "../api/client";
+import { fetchUsers, createUser, deleteUser, resetUserPassword, resetSettings as apiResetSettings, fetchRecipients, addRecipient, deleteRecipient, sendTestSms, updateRecipient, muteAlerts, getMuteStatus } from "../api/client";
 import type { UserEntry, SmsRecipient } from "../api/client";
 
 const SETTING_BOUNDS: Record<string, { min: number; max: number }> = {
@@ -149,6 +149,12 @@ export default function SettingsPage() {
   const [resetModal, setResetModal] = useState<{ id: number; name: string; password: string; errors: FormErrors } | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: number; username: string; type: "user" | "recipient" } | null>(null);
   const [toasts, setToasts] = useState<{ id: number; message: string; type: "success" | "error" }[]>([]);
+  const [muteStatus, setMuteStatus] = useState<{ muted: boolean; muteExpires: string | null }>({ muted: false, muteExpires: null });
+  const [muteLoading, setMuteLoading] = useState(false);
+
+  useEffect(() => {
+    getMuteStatus().then((s) => { if (s) setMuteStatus(s); });
+  }, []);
 
   const showToast = useCallback((message: string, type: "success" | "error") => {
     const id = Date.now();
@@ -157,6 +163,16 @@ export default function SettingsPage() {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 4000);
   }, []);
+
+  const handleMute = useCallback(async (hours: number | null) => {
+    setMuteLoading(true);
+    const result = await muteAlerts(hours);
+    setMuteLoading(false);
+    if (result) {
+      setMuteStatus(result);
+      showToast(result.muted ? `SMS alerts muted for ${hours} hours` : "SMS alerts unmuted", result.muted ? "success" : "success");
+    }
+  }, [showToast]);
 
   const [form, setForm] = useState<UserForm>({
     name: "",
@@ -720,6 +736,48 @@ export default function SettingsPage() {
                 </div>
               </div>
             )}
+          </div>
+
+          <div>
+            <div className="flex items-center gap-2 mb-4">
+              <MessageSquare className="text-orange-600" size={18} />
+              <h2 className="text-lg font-bold text-gray-800">SMS Alert Sleep / Mute</h2>
+            </div>
+            <p className="text-sm text-gray-500 mb-4">Temporarily pause SMS alerts for device disconnections and threshold warnings</p>
+
+            {muteStatus.muted && muteStatus.muteExpires && (
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4">
+                <div className="flex items-center gap-2">
+                  <ToggleRight size={18} className="text-amber-600" />
+                  <span className="text-sm font-semibold text-amber-800">SMS alerts muted until {new Date(muteStatus.muteExpires).toLocaleString()}</span>
+                </div>
+              </div>
+            )}
+
+            <div className="bg-white rounded-lg shadow p-4">
+              <div className="grid grid-cols-4 sm:grid-cols-7 gap-2 mb-3">
+                {[1, 2, 4, 6, 8, 12, 24].map((hours) => (
+                  <button
+                    key={hours}
+                    onClick={() => handleMute(hours)}
+                    disabled={muteLoading}
+                    className="px-3 py-2 text-sm font-medium rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 hover:border-orange-300 transition-all disabled:opacity-50"
+                  >
+                    {hours}h
+                  </button>
+                ))}
+              </div>
+              {muteStatus.muted && (
+                <button
+                  onClick={() => handleMute(null)}
+                  disabled={muteLoading}
+                  className="flex items-center gap-2 px-4 py-2 text-sm font-semibold rounded-lg bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 transition-all disabled:opacity-50"
+                >
+                  <ToggleLeft size={16} />
+                  Unmute Alerts
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="flex items-center justify-between">

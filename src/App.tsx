@@ -28,6 +28,7 @@ import { SensorProvider } from "./contexts/SensorProvider";
 import { useActivityLogs } from "./contexts/SensorContext";
 import { AuthProvider } from "./contexts/AuthContext";
 import { useAuth } from "./contexts/useAuth";
+import { DeviceConnectionMonitor } from "./components/DeviceConnectionMonitor";
 import { FloatingAlertProvider, FloatingAlertContainer } from "./components/FloatingAlert";
 import { useThresholdAlert } from "./hooks/useThresholdAlert";
 
@@ -189,6 +190,7 @@ export default function App() {
         <FloatingAlertProvider>
           <AppContent />
           <FloatingAlertContainer />
+          <DeviceConnectionMonitor />
         </FloatingAlertProvider>
       </SensorProvider>
     </AuthProvider>

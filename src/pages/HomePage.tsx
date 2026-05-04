@@ -36,9 +36,10 @@ export default function HomePage({ onNavigate }: Props) {
   
   const thresholds = useMemo(() => getSettingsThresholds(settings), [settings]);
   
-  const hasData = !!data && !loading;
+  const hasData = !!data && !loading && !error;
   
   const tankStatus = useMemo(() => {
+    if (error) return { safe: false, alerts: ["Device offline"] };
     if (!hasData) return { safe: false, alerts: ["No sensor data"] };
     
     const alerts: string[] = [];
@@ -59,7 +60,7 @@ export default function HomePage({ onNavigate }: Props) {
       safe: alerts.length === 0,
       alerts: alerts.length > 0 ? alerts : ["Tank is Safe"],
     };
-  }, [data, thresholds, hasData]);
+  }, [data, thresholds, hasData, error]);
 
   const getStatusBadge = () => {
     if (loading) {
@@ -135,9 +136,9 @@ export default function HomePage({ onNavigate }: Props) {
   ];
 
   const highlights = [
-    { label: "Temperature", value: loading ? "..." : data ? `${data.temperature}°C` : "--", color: "bg-blue-50 border-blue-200 text-blue-700" },
-    { label: "pH Level", value: loading ? "..." : data ? `${data.ph}` : "--", color: "bg-emerald-50 border-emerald-200 text-emerald-700" },
-    { label: "Water Level", value: loading ? "..." : data ? `${data.water_level}%` : "--", color: "bg-indigo-50 border-indigo-200 text-indigo-700" },
+    { label: "Temperature", value: error ? "Error" : loading ? "..." : data ? `${data.temperature}°C` : "--", color: error ? "bg-red-50 border-red-200 text-red-700" : "bg-blue-50 border-blue-200 text-blue-700" },
+    { label: "pH Level", value: error ? "Error" : loading ? "..." : data ? `${data.ph}` : "--", color: error ? "bg-red-50 border-red-200 text-red-700" : "bg-emerald-50 border-emerald-200 text-emerald-700" },
+    { label: "Water Level", value: error ? "Error" : loading ? "..." : data ? `${data.water_level}%` : "--", color: error ? "bg-red-50 border-red-200 text-red-700" : "bg-indigo-50 border-indigo-200 text-indigo-700" },
   ];
 
   const recentAlerts = tankStatus.alerts.filter(alert => alert !== "Tank is Safe").slice(0, 4);
@@ -280,29 +281,35 @@ export default function HomePage({ onNavigate }: Props) {
 
         <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm lg:col-span-3">
           <h3 className="mb-4 text-lg font-bold text-gray-800">Key Metrics Summary</h3>
-          <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
-            <div className="rounded-xl bg-blue-50 p-4">
-              <p className="text-xs text-gray-500">Temperature</p>
-              <p className="mt-1 text-2xl font-bold text-blue-600">{data?.temperature ?? "--"}°C</p>
-              <p className="mt-1 text-xs text-gray-400">
-                Optimal: {thresholds.temperature.range.min}-{thresholds.temperature.range.max}°C
-              </p>
+          {error ? (
+            <div className="rounded-lg p-3 font-bold text-sm bg-red-100 text-red-700 text-center">
+              ESP32 device is offline. Metrics unavailable.
             </div>
-            <div className="rounded-xl bg-emerald-50 p-4">
-              <p className="text-xs text-gray-500">pH Level</p>
-              <p className="mt-1 text-2xl font-bold text-emerald-600">{data?.ph ?? "--"}</p>
-              <p className="mt-1 text-xs text-gray-400">
-                Optimal: {thresholds.ph.range.min}-{thresholds.ph.range.max}
-              </p>
+          ) : (
+            <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
+              <div className="rounded-xl bg-blue-50 p-4">
+                <p className="text-xs text-gray-500">Temperature</p>
+                <p className="mt-1 text-2xl font-bold text-blue-600">{data?.temperature ?? "--"}°C</p>
+                <p className="mt-1 text-xs text-gray-400">
+                  Optimal: {thresholds.temperature.range.min}-{thresholds.temperature.range.max}°C
+                </p>
+              </div>
+              <div className="rounded-xl bg-emerald-50 p-4">
+                <p className="text-xs text-gray-500">pH Level</p>
+                <p className="mt-1 text-2xl font-bold text-emerald-600">{data?.ph ?? "--"}</p>
+                <p className="mt-1 text-xs text-gray-400">
+                  Optimal: {thresholds.ph.range.min}-{thresholds.ph.range.max}
+                </p>
+              </div>
+              <div className="rounded-xl bg-indigo-50 p-4">
+                <p className="text-xs text-gray-500">Water Level</p>
+                <p className="mt-1 text-2xl font-bold text-indigo-600">{data?.water_level ?? "--"}%</p>
+                <p className="mt-1 text-xs text-gray-400">
+                  Optimal: {thresholds.water_level.range.min}-{thresholds.water_level.range.max}%
+                </p>
+              </div>
             </div>
-            <div className="rounded-xl bg-indigo-50 p-4">
-              <p className="text-xs text-gray-500">Water Level</p>
-              <p className="mt-1 text-2xl font-bold text-indigo-600">{data?.water_level ?? "--"}%</p>
-              <p className="mt-1 text-xs text-gray-400">
-                Optimal: {thresholds.water_level.range.min}-{thresholds.water_level.range.max}%
-              </p>
-            </div>
-          </div>
+          )}
         </div>
       </section>
     </div>
